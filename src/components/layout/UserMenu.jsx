@@ -5,11 +5,12 @@
  * signs the user out. The sign-out action confirms before it runs so a stray
  * click cannot end a session.
  */
-import React, { useState } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import Icon from '../AppIcon';
 import Dropdown from '../ui/Dropdown';
-import ConfirmDialog from '../ui/ConfirmDialog';
+import useSignOut from './useSignOut';
+import SignOutConfirmDialog from './SignOutConfirmDialog';
 import { useAuth } from '../../context/AuthContext';
 import { cn } from '../../utils/cn';
 
@@ -23,26 +24,20 @@ export const getInitials = (user) => {
 };
 
 const UserMenu = ({ className }) => {
-  const { user, isAuthenticated, signOut } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const navigate = useNavigate();
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [signingOut, setSigningOut] = useState(false);
+  const {
+    confirmOpen,
+    openConfirm,
+    closeConfirm,
+    signingOut,
+    confirmSignOut,
+  } = useSignOut();
 
   const displayName =
     [user?.first_name, user?.last_name].filter(Boolean).join(' ').trim() ||
     user?.email?.split('@')[0] ||
     'Account';
-
-  const handleSignOut = async () => {
-    setSigningOut(true);
-    try {
-      await signOut();
-      setConfirmOpen(false);
-      navigate('/signin', { replace: true });
-    } finally {
-      setSigningOut(false);
-    }
-  };
 
   if (!isAuthenticated) {
     return (
@@ -98,20 +93,15 @@ const UserMenu = ({ className }) => {
             label: 'Sign out',
             icon: 'LogOut',
             danger: true,
-            onSelect: () => setConfirmOpen(true),
+            onSelect: openConfirm,
           },
         ]}
       />
 
-      <ConfirmDialog
+      <SignOutConfirmDialog
         isOpen={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        onConfirm={handleSignOut}
-        title="Sign out of CodeGuard?"
-        description="Your saved scans stay in your account. You will need to sign in again to view them."
-        confirmLabel="Sign out"
-        cancelLabel="Stay signed in"
-        variant="destructive"
+        onClose={closeConfirm}
+        onConfirm={confirmSignOut}
         loading={signingOut}
       />
     </>

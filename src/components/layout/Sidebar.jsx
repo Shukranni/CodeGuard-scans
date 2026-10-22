@@ -10,6 +10,9 @@ import { Link, NavLink, useLocation } from 'react-router-dom';
 import Icon from '../AppIcon';
 import Button from '../ui/Button';
 import { NAV_SECTIONS, PRODUCT_NAME, PRODUCT_TAGLINE } from './navConfig';
+import { useAuth } from '../../context/AuthContext';
+import useSignOut from './useSignOut';
+import SignOutConfirmDialog from './SignOutConfirmDialog';
 import { cn } from '../../utils/cn';
 
 const NavItem = ({ item, onNavigate }) => (
@@ -33,6 +36,14 @@ const NavItem = ({ item, onNavigate }) => (
 
 const Sidebar = ({ isOpen = false, onClose }) => {
   const location = useLocation();
+  const { isAuthenticated } = useAuth();
+  const {
+    confirmOpen,
+    openConfirm,
+    closeConfirm,
+    signingOut,
+    confirmSignOut,
+  } = useSignOut({ onSignedOut: onClose });
 
   // Close the drawer whenever the route changes.
   useEffect(() => {
@@ -43,11 +54,13 @@ const Sidebar = ({ isOpen = false, onClose }) => {
   useEffect(() => {
     if (!isOpen) return undefined;
     const handleKey = (event) => {
-      if (event.key === 'Escape') onClose?.();
+      // The sign-out dialog owns Escape while it is open — it dismisses the
+      // dialog and leaves the drawer untouched.
+      if (event.key === 'Escape' && !confirmOpen) onClose?.();
     };
     document.addEventListener('keydown', handleKey);
     return () => document.removeEventListener('keydown', handleKey);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, confirmOpen]);
 
   return (
     <>
@@ -126,12 +139,29 @@ const Sidebar = ({ isOpen = false, onClose }) => {
         </nav>
 
         {/* ── Footer ────────────────────────────────────────────────────── */}
-        <div className="shrink-0 border-t border-border px-4 py-3">
-          <p className="text-[11px] leading-relaxed text-muted-foreground">
+        <div className="shrink-0 border-t border-border px-3 py-3">
+          {isAuthenticated ? (
+            <button
+              type="button"
+              onClick={openConfirm}
+              className="nav-item w-full hover:text-error"
+            >
+              <Icon name="LogOut" size={17} className="nav-item-icon" aria-hidden="true" />
+              <span className="truncate">Sign out</span>
+            </button>
+          ) : null}
+          <p className="mt-2 px-3 text-[11px] leading-relaxed text-muted-foreground">
             Static analysis with Semgrep, Gitleaks and dependency auditing.
           </p>
         </div>
       </aside>
+
+      <SignOutConfirmDialog
+        isOpen={confirmOpen}
+        onClose={closeConfirm}
+        onConfirm={confirmSignOut}
+        loading={signingOut}
+      />
     </>
   );
 };
