@@ -3,7 +3,12 @@ import shutil
 import time
 
 from .dependency import DependencyScanner, npm_available, reset_npm_cache
-from .semgrep import SemgrepScanner, semgrep_available, reset_semgrep_cache
+from .semgrep import (
+    SemgrepScanner,
+    github_actions_enabled,
+    semgrep_available,
+    reset_semgrep_cache,
+)
 from .gitleaks import GitleaksScanner, gitleaks_available, reset_gitleaks_cache
 
 EXCLUDED_DIRS = {
@@ -50,7 +55,11 @@ def scanner_availability(force_refresh=False):
         'semgrep': {
             'available': semgrep_available(),
             'label': SCANNER_LABELS['semgrep'],
-            'hint': 'pip install semgrep',
+            'hint': (
+                'Runs on GitHub Actions (CODEGUARD_GITHUB_TOKEN)'
+                if github_actions_enabled()
+                else 'pip install semgrep'
+            ),
         },
         'gitleaks': {
             'available': gitleaks_available(),
@@ -99,7 +108,7 @@ class ScannerRunner:
         'gitleaks': GitleaksScanner
     }
 
-    def __init__(self, project_path, selected_scanners):
+    def __init__(self, project_path, selected_scanners, project=None):
         # 1. Resolve nested single-directory wrappers (common in zip downloads)
         actual_path = project_path
         try:
@@ -112,6 +121,10 @@ class ScannerRunner:
             pass
         self.project_path = actual_path
         self.selected_scanners = selected_scanners
+        # The Project row is only needed by scanners that refer back to the
+        # uploaded archive (Semgrep's GitHub Actions offload mints a signed
+        # download link from it).
+        self.scanner_kwargs = {'semgrep': {'project': project}} if project is not None else {}
 
         # 2. Proactively delete heavy/ignored directories to speed up scans and prevent hanging
         # ONLY do this if the path is in a temporary folder (to protect active development workspaces)
@@ -160,7 +173,9 @@ class ScannerRunner:
                     except Exception:
                         pass
                 scanner_class = self.SCANNER_MAP[scanner_name]
-                scanner_instance = scanner_class(self.project_path)
+                scanner_instance = scanner_class(
+                    self.project_path, **self.scanner_kwargs.get(scanner_name, {})
+                )
                 try:
                     # Execute the scan
                     scan_result = scanner_instance.scan()

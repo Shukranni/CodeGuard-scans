@@ -1810,3 +1810,566 @@ class ScanSummaryTests(ScanTestEnvironment, AuthMixin, APITestCase):
         self.assertEqual(row['summary']['findings']['total'], 4)
         self.assertEqual(row['summary']['riskScore'], 100)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Semgrep offload to GitHub Actions (DEPLOYMENT.md §8)
+# ─────────────────────────────────────────────────────────────────────────────
+
+GITHUB_ENV_ON = {
+    'CODEGUARD_GITHUB_TOKEN': 'ghp_test_token',
+    'CODEGUARD_GITHUB_ACTIONS_REPO': 'octo/repo',
+    'CODEGUARD_PUBLIC_API_BASE': 'https://api.example.com',
+    'CODEGUARD_SEMGREP_CONFIG': '',
+}
+GITHUB_ENV_OFF = {name: '' for name in GITHUB_ENV_ON}
+
+
+class GitHubActionsConfigTests(SimpleTestCase):
+    """Remote dispatching activates only when every piece is configured."""
+
+    def test_enabled_needs_token_repository_and_public_base(self):
+        from .services import github_actions
+
+        with mock.patch.dict(os.environ, GITHUB_ENV_OFF):
+            self.assertFalse(github_actions.enabled())
+
+        with mock.patch.dict(os.environ, GITHUB_ENV_ON):
+            self.assertTrue(github_actions.enabled())
+
+        required = ('CODEGUARD_GITHUB_TOKEN', 'CODEGUARD_GITHUB_ACTIONS_REPO',
+                    'CODEGUARD_PUBLIC_API_BASE')
+        for missing in required:
+            partial = dict(GITHUB_ENV_ON, **{missing: ''})
+            with mock.patch.dict(os.environ, partial):
+                self.assertFalse(github_actions.enabled(), f'{missing} is required')
+
+    def test_remote_configuration_makes_semgrep_available_without_a_local_install(self):
+        from .services import semgrep as semgrep_module
+        from .services.scanner_runner import reset_scanner_caches, scanner_availability
+
+        reset_scanner_caches()
+        self.addCleanup(reset_scanner_caches)
+        with mock.patch.dict(os.environ, GITHUB_ENV_ON), \
+                mock.patch.object(semgrep_module, '_find_semgrep', return_value=None):
+            self.assertTrue(semgrep_module.semgrep_available())
+            info = scanner_availability(force_refresh=True)['semgrep']
+
+        self.assertTrue(info['available'])
+        self.assertIn('GitHub Actions', info['hint'])
+
+    def test_availability_hint_stays_local_when_remote_is_not_configured(self):
+        from .services.scanner_runner import reset_scanner_caches, scanner_availability
+
+        reset_scanner_caches()
+        self.addCleanup(reset_scanner_caches)
+        with mock.patch.dict(os.environ, GITHUB_ENV_OFF):
+            info = scanner_availability(force_refresh=True)['semgrep']
+
+        self.assertEqual(info['hint'], 'pip install semgrep')
+
+
+class RemoteArgumentTests(SimpleTestCase):
+    def test_remote_command_args_mirror_the_local_flags(self):
+        from .services.semgrep import EXCLUDED_DIRS, _command_args
+
+        args = _command_args('p/default', 2, 0)
+
+        self.assertEqual(args[args.index('--config') + 1], 'p/default')
+        self.assertEqual(args[args.index('--jobs') + 1], '2')
+        # The runner has 7 GB — no memory cap, unlike the 512 MB box.
+        self.assertEqual(args[args.index('--max-memory') + 1], '0')
+        for directory in EXCLUDED_DIRS:
+            self.assertIn(directory, args)
+        self.assertIn('--disable-version-check', args)
+        self.assertIn('--metrics', args)
+
+    def test_only_shell_safe_arguments_may_travel_to_the_runner(self):
+        from .services.semgrep import _args_are_safe
+
+        self.assertTrue(_args_are_safe(['--config', 'p/default', '--jobs', '2']))
+        self.assertFalse(_args_are_safe(['--config', 'p/default; rm -rf /']))
+        self.assertFalse(_args_are_safe(['--config', 'p/has space']))
+        self.assertFalse(_args_are_safe(['--config', '']))
+
+    def test_a_local_rule_file_can_not_be_used_remotely(self):
+        from .services import semgrep as semgrep_module
+
+        with mock.patch.dict(os.environ, {'CODEGUARD_SEMGREP_CONFIG': '/opt/rules.yaml'}):
+            self.assertIsNone(semgrep_module._remote_config())
+        with mock.patch.dict(os.environ, {'CODEGUARD_SEMGREP_CONFIG': ''}):
+            self.assertEqual(semgrep_module._remote_config(), 'p/default')
+        with mock.patch.dict(
+            os.environ, {'CODEGUARD_SEMGREP_CONFIG': 'https://rules.example.com/r.yaml'},
+        ):
+            self.assertEqual(semgrep_module._remote_config(), 'https://rules.example.com/r.yaml')
+
+
+class SemgrepRemoteScanTests(SimpleTestCase):
+    """
+    With GitHub Actions configured the scanner dispatches remotely and
+    touches the local install only as a fallback — enabling the feature
+    can never make a scan worse than before.
+    """
+
+    def setUp(self):
+        from scans.services import semgrep as semgrep_module
+
+        self.module = semgrep_module
+        self.project = tempfile.mkdtemp(prefix='codeguard_remote_semgrep_')
+        self.addCleanup(shutil.rmtree, self.project, ignore_errors=True)
+
+    def _completed(self, payload=b'{"results": []}', stderr=b'', returncode=0):
+        result = mock.Mock()
+        result.stdout = payload
+        result.stderr = stderr
+        result.returncode = returncode
+        return result
+
+    def test_remote_success_returns_without_starting_a_local_process(self):
+        remote_stdout = json.dumps({
+            'results': [{'extra': {'severity': 'ERROR'}}, {'extra': {'severity': 'INFO'}}],
+        })
+        scanner = self.module.SemgrepScanner(self.project, project=mock.Mock(pk=42))
+
+        with mock.patch.dict(os.environ, GITHUB_ENV_ON), \
+                mock.patch.object(self.module.github_actions, 'dispatch') as dispatch, \
+                mock.patch.object(
+                    self.module.github_actions, 'wait_for_result',
+                    return_value={
+                        'stdout': remote_stdout,
+                        'stderr': '',
+                        'exit_code': 0,
+                        'run_url': 'https://github.com/octo/repo/actions/runs/1',
+                    },
+                ), \
+                mock.patch.object(self.module, '_find_semgrep') as find_exe:
+            result = scanner.scan()
+
+        self.assertIsNone(result.get('error'))
+        self.assertEqual(result['total_vulnerabilities'], 2)
+        self.assertEqual(result['severity_counts'], {'INFO': 1, 'WARNING': 0, 'ERROR': 1})
+        self.assertEqual(result['exit_code'], 0)
+
+        kwargs = dispatch.call_args.kwargs
+        self.assertTrue(kwargs['archive_url'].startswith(
+            'https://api.example.com/api/scans/archive/?token=',
+        ))
+        self.assertIn('--config p/default', kwargs['args'])
+        self.assertIn('--jobs 2', kwargs['args'])
+        self.assertTrue(kwargs['scan_id'].startswith('42-'))
+        find_exe.assert_not_called()
+
+    def test_a_broken_remote_falls_back_to_the_local_install(self):
+        scanner = self.module.SemgrepScanner(self.project, project=mock.Mock(pk=7))
+
+        with mock.patch.dict(os.environ, GITHUB_ENV_ON), \
+                mock.patch.object(
+                    self.module.github_actions, 'dispatch',
+                    side_effect=self.module.github_actions.GitHubActionsError('GitHub is down'),
+                ), \
+                mock.patch.object(self.module, '_find_semgrep', return_value='semgrep.exe'), \
+                mock.patch.object(self.module, 'rules_config', return_value='p/default'), \
+                mock.patch.object(
+                    self.module.subprocess, 'run', return_value=self._completed(),
+                ) as run:
+            result = scanner.scan()
+
+        self.assertIsNone(result.get('error'))
+        self.assertEqual(result['total_vulnerabilities'], 0)
+        run.assert_called_once()
+
+    def test_a_broken_remote_without_a_local_install_is_a_real_error(self):
+        scanner = self.module.SemgrepScanner(self.project, project=mock.Mock(pk=7))
+
+        with mock.patch.dict(os.environ, GITHUB_ENV_ON), \
+                mock.patch.object(
+                    self.module.github_actions, 'dispatch',
+                    side_effect=self.module.github_actions.GitHubActionsError(
+                        'token lacks the repo scope',
+                    ),
+                ), \
+                mock.patch.object(self.module, '_find_semgrep', return_value=None):
+            result = scanner.scan()
+
+        self.assertIn('repo scope', result['error'])
+        # Remote was configured (available) but broke — not a missing tool.
+        self.assertFalse(result.get('unavailable'))
+
+    def test_unusable_remote_output_is_reported_with_the_stderr_tail(self):
+        scanner = self.module.SemgrepScanner(self.project, project=mock.Mock(pk=7))
+
+        with mock.patch.dict(os.environ, GITHUB_ENV_ON), \
+                mock.patch.object(self.module.github_actions, 'dispatch'), \
+                mock.patch.object(
+                    self.module.github_actions, 'wait_for_result',
+                    return_value={
+                        'stdout': 'definitely not json',
+                        'stderr': 'scanner exploded',
+                        'exit_code': 2,
+                        'run_url': 'https://github.com/octo/repo/actions/runs/2',
+                    },
+                ), \
+                mock.patch.object(self.module, '_find_semgrep', return_value=None):
+            result = scanner.scan()
+
+        self.assertIn('unusable Semgrep output', result['error'])
+        self.assertIn('scanner exploded', result['error'])
+        self.assertEqual(result['exit_code'], 2)
+
+    def test_without_a_project_row_the_scan_stays_local(self):
+        scanner = self.module.SemgrepScanner(self.project)
+
+        with mock.patch.dict(os.environ, GITHUB_ENV_ON), \
+                mock.patch.object(self.module, '_find_semgrep', return_value=None):
+            result = scanner.scan()
+
+        self.assertTrue(result.get('unavailable'))
+
+    def test_a_local_rule_config_never_reaches_the_runner(self):
+        scanner = self.module.SemgrepScanner(self.project, project=mock.Mock(pk=7))
+
+        with mock.patch.dict(
+            os.environ, {**GITHUB_ENV_ON, 'CODEGUARD_SEMGREP_CONFIG': '/opt/rules.yaml'},
+        ), \
+                mock.patch.object(self.module.github_actions, 'dispatch') as dispatch, \
+                mock.patch.object(self.module, '_find_semgrep', return_value=None):
+            result = scanner.scan()
+
+        dispatch.assert_not_called()
+        self.assertIn('local file', result['error'])
+
+
+class GitHubActionsProtocolTests(SimpleTestCase):
+    """The dispatch / poll / download conversation with GitHub's REST API."""
+
+    ENV = dict(GITHUB_ENV_ON, CODEGUARD_GITHUB_POLL_SECONDS='0.5')
+
+    def _response(self, status_code=200, payload=None, content=b''):
+        response = mock.Mock()
+        response.status_code = status_code
+        response.json.return_value = payload if payload is not None else {}
+        response.text = json.dumps(payload) if payload is not None else ''
+        response.content = content
+        return response
+
+    def _artifact_zip(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            archive.writestr('semgrep.json', json.dumps({
+                'results': [{'extra': {'severity': 'INFO'}}],
+            }))
+            archive.writestr('rc.txt', '0')
+            archive.writestr('err.txt', '')
+        return buffer.getvalue()
+
+    def _now_iso(self):
+        from datetime import datetime, timezone as utc_timezone
+        return datetime.now(utc_timezone.utc).isoformat().replace('+00:00', 'Z')
+
+    def test_dispatch_queues_the_workflow_with_the_scan_inputs(self):
+        from .services import github_actions
+
+        with mock.patch.dict(os.environ, self.ENV), \
+                mock.patch.object(
+                    github_actions.requests, 'post', return_value=self._response(204),
+                ) as post:
+            github_actions.dispatch(
+                scan_id='5-123',
+                archive_url='https://api.example.com/api/scans/archive/?token=abc',
+                args='--json --config p/default',
+            )
+
+        self.assertIn(
+            '/repos/octo/repo/actions/workflows/semgrep-scan.yml/dispatches',
+            post.call_args[0][0],
+        )
+        self.assertEqual(
+            post.call_args[1]['headers']['Authorization'],
+            'Bearer ghp_test_token',
+        )
+        self.assertEqual(post.call_args[1]['json'], {
+            'ref': 'main',
+            'inputs': {
+                'scan_id': '5-123',
+                'archive_url': 'https://api.example.com/api/scans/archive/?token=abc',
+                'args': '--json --config p/default',
+            },
+        })
+
+    def test_a_missing_workflow_file_is_explained(self):
+        from .services import github_actions
+
+        with mock.patch.dict(os.environ, self.ENV), \
+                mock.patch.object(
+                    github_actions.requests, 'post', return_value=self._response(404),
+                ):
+            with self.assertRaises(github_actions.GitHubActionsError) as ctx:
+                github_actions.dispatch('5-123', 'u', 'a')
+
+        self.assertIn('pushed to the default branch', str(ctx.exception))
+
+    def test_wait_downloads_the_artifact_and_returns_the_payload(self):
+        from .services import github_actions
+
+        run = {
+            'id': 77,
+            'status': 'completed',
+            'conclusion': 'success',
+            'html_url': 'https://github.com/octo/repo/actions/runs/77',
+        }
+        listed = dict(
+            run, name='CodeGuard Semgrep scan',
+            display_title='CodeGuard scan 5-123', created_at=self._now_iso(),
+        )
+        responses = [
+            self._response(200, {'workflow_runs': [listed]}),
+            self._response(200, run),
+            self._response(200, {'artifacts': [{
+                'name': 'semgrep-output',
+                'expired': False,
+                'archive_download_url': 'https://api.github.com/artifacts/1/zip',
+            }]}),
+            self._response(200, content=self._artifact_zip()),
+        ]
+
+        with mock.patch.dict(os.environ, self.ENV), \
+                mock.patch.object(
+                    github_actions.requests, 'get', side_effect=responses,
+                ) as get:
+            payload = github_actions.wait_for_result('5-123', timeout_seconds=30)
+
+        self.assertEqual(payload['exit_code'], 0)
+        self.assertEqual(
+            json.loads(payload['stdout'])['results'][0]['extra']['severity'], 'INFO',
+        )
+        self.assertEqual(payload['run_url'], 'https://github.com/octo/repo/actions/runs/77')
+        self.assertEqual(get.call_count, 4)
+
+    def test_a_failed_run_reports_its_url(self):
+        from .services import github_actions
+
+        run = {
+            'id': 78,
+            'status': 'completed',
+            'conclusion': 'failure',
+            'html_url': 'https://github.com/octo/repo/actions/runs/78',
+        }
+        listed = dict(
+            run, name='CodeGuard Semgrep scan',
+            display_title='CodeGuard scan 5-124', created_at=self._now_iso(),
+        )
+        responses = [
+            self._response(200, {'workflow_runs': [listed]}),
+            self._response(200, run),
+        ]
+
+        with mock.patch.dict(os.environ, self.ENV), \
+                mock.patch.object(github_actions.requests, 'get', side_effect=responses):
+            with self.assertRaises(github_actions.GitHubActionsError) as ctx:
+                github_actions.wait_for_result('5-124', timeout_seconds=30)
+
+        message = str(ctx.exception)
+        self.assertIn('failure', message)
+        self.assertIn('actions/runs/78', message)
+
+    def test_waiting_gives_up_after_the_timeout(self):
+        from .services import github_actions
+
+        with mock.patch.dict(os.environ, self.ENV), \
+                mock.patch.object(
+                    github_actions.requests, 'get',
+                    return_value=self._response(200, {'workflow_runs': []}),
+                ), \
+                mock.patch.object(github_actions.time, 'sleep'), \
+                mock.patch.object(
+                    github_actions.time, 'monotonic', side_effect=[1000.0, 1040.0],
+                ):
+            with self.assertRaises(github_actions.GitHubActionsError) as ctx:
+                github_actions.wait_for_result('5-125', timeout_seconds=30)
+
+        self.assertIn('Timed out', str(ctx.exception))
+
+
+class ArchiveLinkTests(ScanTestEnvironment, TestCase):
+    """Signed archive links: mintable by the worker, verifiable statelessly,
+    dead once they expire."""
+
+    BASE_ENV = {
+        'CODEGUARD_PUBLIC_API_BASE': 'https://api.example.com',
+        'CODEGUARD_ARCHIVE_TOKEN_MAX_AGE': '900',
+    }
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, self.BASE_ENV)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _project(self):
+        suffix = uuid_mod.uuid4().hex[:10]
+        owner = User.objects.create_user(
+            username=f'{suffix}@example.com', email=f'{suffix}@example.com', password='x',
+        )
+        return self.make_project(owner)
+
+    def _token(self, project):
+        """The decoded token, exactly what the API endpoint receives."""
+        from urllib.parse import unquote
+        from .services.archive_link import build_archive_url
+        return unquote(build_archive_url(project).split('token=', 1)[1])
+
+    def test_round_trip_mint_and_resolve(self):
+        from .services.archive_link import build_archive_url, resolve_project
+
+        project = self._project()
+        url = build_archive_url(project)
+
+        self.assertTrue(url.startswith(
+            'https://api.example.com/api/scans/archive/?token=',
+        ))
+        resolved = resolve_project(self._token(project))
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.pk, project.pk)
+
+    def test_no_public_base_yields_no_url(self):
+        from .services.archive_link import build_archive_url
+
+        project = self._project()
+        with mock.patch.dict(os.environ, {'CODEGUARD_PUBLIC_API_BASE': ''}):
+            self.assertIsNone(build_archive_url(project))
+
+    def test_tampered_and_garbage_tokens_resolve_to_nothing(self):
+        from .services.archive_link import resolve_project
+
+        project = self._project()
+        token = self._token(project)
+
+        self.assertIsNone(resolve_project(''))
+        self.assertIsNone(resolve_project(None))
+        self.assertIsNone(resolve_project('not-a-token'))
+        self.assertIsNone(resolve_project(token + 'tampered'))
+
+    def test_an_expired_token_resolves_to_nothing(self):
+        from .services.archive_link import resolve_project
+
+        project = self._project()
+        token = self._token(project)
+
+        with mock.patch.dict(os.environ, {'CODEGUARD_ARCHIVE_TOKEN_MAX_AGE': '-1'}):
+            self.assertIsNone(resolve_project(token))
+
+
+class ArchiveDownloadEndpointTests(ScanTestEnvironment, TestCase):
+    """``GET /api/scans/archive/?token=…`` streams the ZIP to the GitHub
+    runner — and answers 404 for anything else."""
+
+    BASE_ENV = {
+        'CODEGUARD_PUBLIC_API_BASE': 'https://api.example.com',
+        'CODEGUARD_ARCHIVE_TOKEN_MAX_AGE': '900',
+    }
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, self.BASE_ENV)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _project(self, **kwargs):
+        suffix = uuid_mod.uuid4().hex[:10]
+        owner = User.objects.create_user(
+            username=f'{suffix}@example.com', email=f'{suffix}@example.com', password='x',
+        )
+        if kwargs:
+            return Project.objects.create(owner=owner, **kwargs)
+        return self.make_project(owner)
+
+    def _path(self, project):
+        from .services.archive_link import build_archive_url
+        return build_archive_url(project).split('https://api.example.com', 1)[1]
+
+    def test_a_valid_token_streams_the_archive(self):
+        project = self._project()
+
+        response = self.client.get(self._path(project))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/zip')
+        self.assertIn('attachment', response['Content-Disposition'])
+        self.assertEqual(b''.join(response.streaming_content), VALID_ZIP_BYTES)
+
+    def test_missing_garbage_or_expired_tokens_are_404(self):
+        project = self._project()
+        path = self._path(project)
+
+        self.assertEqual(self.client.get('/api/scans/archive/').status_code, 404)
+        self.assertEqual(
+            self.client.get('/api/scans/archive/?token=garbage').status_code, 404,
+        )
+        with mock.patch.dict(os.environ, {'CODEGUARD_ARCHIVE_TOKEN_MAX_AGE': '-1'}):
+            self.assertEqual(self.client.get(path).status_code, 404)
+
+    def test_a_project_whose_upload_never_landed_is_404(self):
+        project = self._project(name='no-zip', zip_file='')
+
+        self.assertEqual(self.client.get(self._path(project)).status_code, 404)
+
+
+class ScannerRunnerProjectPassthroughTests(SimpleTestCase):
+    """The Project row reaches the Semgrep scanner (GitHub Actions needs it
+    for the signed archive link) and no other scanner."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp(prefix='codeguard_runner_kwargs_')
+        self.addCleanup(shutil.rmtree, self.temp_dir, ignore_errors=True)
+
+    def test_only_semgrep_receives_the_project(self):
+        captured = {}
+
+        class StubSemgrep:
+            def __init__(self, project_path, project=None):
+                captured['semgrep_project'] = project
+
+            def scan(self):
+                return {'total_vulnerabilities': 0}
+
+        class StubGitleaks:
+            # Deliberately no ``project`` keyword: passing one would raise.
+            def __init__(self, project_path):
+                captured['gitleaks_path'] = project_path
+
+            def scan(self):
+                return {'total_vulnerabilities': 0}
+
+        sentinel = object()
+        original_map = ScannerRunner.SCANNER_MAP
+        ScannerRunner.SCANNER_MAP = {'semgrep': StubSemgrep, 'gitleaks': StubGitleaks}
+        try:
+            results = ScannerRunner(
+                self.temp_dir, ['gitleaks', 'semgrep'], project=sentinel,
+            ).run_all()
+        finally:
+            ScannerRunner.SCANNER_MAP = original_map
+
+        self.assertIs(captured['semgrep_project'], sentinel)
+        self.assertEqual(captured['gitleaks_path'], self.temp_dir)
+        self.assertEqual(classify_scan_result(results['semgrep']), 'ok')
+        self.assertEqual(classify_scan_result(results['gitleaks']), 'ok')
+
+    def test_without_a_project_row_nothing_changes(self):
+        captured = {}
+
+        class StubSemgrep:
+            def __init__(self, project_path, project=None):
+                captured['semgrep_project'] = project
+
+            def scan(self):
+                return {'total_vulnerabilities': 0}
+
+        original_map = ScannerRunner.SCANNER_MAP
+        ScannerRunner.SCANNER_MAP = {'semgrep': StubSemgrep}
+        try:
+            results = ScannerRunner(self.temp_dir, ['semgrep']).run_all()
+        finally:
+            ScannerRunner.SCANNER_MAP = original_map
+
+        self.assertIsNone(captured['semgrep_project'])
+        self.assertEqual(classify_scan_result(results['semgrep']), 'ok')
+

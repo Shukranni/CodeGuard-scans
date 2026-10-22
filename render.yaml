@@ -81,6 +81,17 @@ services:
         value: "1"
       - key: CODEGUARD_SEMGREP_MAX_MEMORY
         value: "192"
+      # ── Semgrep offload to GitHub Actions (DEPLOYMENT.md §8) ──────────────
+      # When all three are set, Semgrep runs on GitHub's CI runners
+      # (2 cores / 7 GB, unlimited free minutes for a public repo) instead
+      # of this 512 MB box, falling back to the local install whenever
+      # GitHub is unreachable.  Leave them empty to keep scans local.
+      - key: CODEGUARD_GITHUB_TOKEN
+        sync: false
+      - key: CODEGUARD_GITHUB_ACTIONS_REPO
+        sync: false
+      - key: CODEGUARD_PUBLIC_API_BASE
+        sync: false
 
   # ── Frontend ────────────────────────────────────────────────────────────────
   # A static site is `type: web` + `runtime: static`.

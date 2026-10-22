@@ -1,3 +1,4 @@
+import logging
 import subprocess
 import json
 import shutil
@@ -5,7 +6,10 @@ import os
 import sys
 import time
 
+from . import github_actions
 from .semgrep_rules import DEFAULT_CONFIG, ensure_local_rules
+
+logger = logging.getLogger('scans.worker')
 
 # Directories to skip — these are never user source code
 EXCLUDED_DIRS = [
@@ -27,6 +31,12 @@ SEMGREP_SECONDS_PER_FILE = float(os.environ.get('CODEGUARD_SEMGREP_SECONDS_PER_F
 
 # Upper bound for the scaled timeout.
 SEMGREP_MAX_TIMEOUT = int(os.environ.get('CODEGUARD_SEMGREP_MAX_TIMEOUT', '900'))
+
+# Extra time granted to a GitHub Actions run on top of the local timeout
+# budget: runner boot, `pip install semgrep` and the archive download all
+# happen before Semgrep itself starts.  The workflow's own job timeout
+# (25 minutes) always stays above timeout_for() + this slack.
+REMOTE_SETUP_SLACK_SECONDS = int(os.environ.get('CODEGUARD_SEMGREP_REMOTE_SLACK', '300'))
 
 # Files larger than this are not worth analysing (and slow down the scan).
 MAX_TARGET_BYTES = 1000000
@@ -100,7 +110,16 @@ def reset_semgrep_cache():
 
 
 def semgrep_available():
+    # A configured GitHub Actions runner counts as availability even when
+    # this machine has no local semgrep install at all.
+    if github_actions.enabled():
+        return True
     return _find_semgrep() is not None
+
+
+def github_actions_enabled():
+    """True when Semgrep is configured to run remotely on GitHub Actions."""
+    return github_actions.enabled()
 
 
 def available_memory_gb():
@@ -224,24 +243,32 @@ def timeout_for(project_path):
     return max(SEMGREP_TIMEOUT, min(SEMGREP_MAX_TIMEOUT, scaled))
 
 
-def _build_command(semgrep_exe, config):
-    """Build the Semgrep command line."""
+def _command_args(config, jobs, max_memory):
+    """Every Semgrep flag except the executable, ``scan`` and the target."""
     exclude_flags = []
     for directory in EXCLUDED_DIRS:
         exclude_flags += ['--exclude', directory]
 
     return [
-        semgrep_exe, 'scan',
         '--json',
         '--config', config,
-        '--jobs', str(default_jobs()),
+        '--jobs', str(jobs),
         '--max-target-bytes', str(MAX_TARGET_BYTES),
-        '--max-memory', str(max_memory_mib()),
+        '--max-memory', str(max_memory),
         # Do not phone home: the version check and the metrics upload each
         # cost a network round trip that can stall a scan.
         '--disable-version-check',
         '--metrics', 'off',
-    ] + exclude_flags + ['.']
+    ] + exclude_flags
+
+
+def _build_command(semgrep_exe, config):
+    """Build the Semgrep command line (executed inside ``project_path``)."""
+    return (
+        [semgrep_exe, 'scan']
+        + _command_args(config, default_jobs(), max_memory_mib())
+        + ['.']
+    )
 
 
 def _diagnose_failure(returncode, stderr_str, elapsed):
@@ -284,13 +311,142 @@ def _stderr_tail(stderr_str, limit=1500):
     return '...\n' + stderr[-limit:]
 
 
+def _summarize(data, exit_code):
+    """Turn parsed Semgrep JSON into the result dict the pipeline stores."""
+    results = data.get('results', [])
+
+    severity_counts = {'INFO': 0, 'WARNING': 0, 'ERROR': 0}
+    for finding in results:
+        severity = finding.get('extra', {}).get('severity', 'INFO')
+        if severity in severity_counts:
+            severity_counts[severity] += 1
+
+    return {
+        'total_vulnerabilities': len(results),
+        'severity_counts': severity_counts,
+        'all_vulnerabilities': results,
+        'exit_code': exit_code,
+    }
+
+
+def _remote_config():
+    """
+    The ``--config`` value for a remote run.
+
+    A local path or cached rule file only exists on this machine, so a
+    remote run needs something the GitHub runner can fetch itself — the
+    registry config (``p/default``) or an https URL.  Anything else
+    returns ``None`` and the scan stays local.
+    """
+    name = (os.environ.get('CODEGUARD_SEMGREP_CONFIG') or DEFAULT_CONFIG).strip() or DEFAULT_CONFIG
+    if name.startswith(('http://', 'https://')):
+        return name
+    if name.startswith(('/', '.')) or os.path.isfile(name):
+        return None
+    return name
+
+
+def _remote_jobs():
+    """Worker count for the GitHub runner (2 cores, 7 GB — no tight cap)."""
+    try:
+        return max(1, int(os.environ.get('CODEGUARD_SEMGREP_REMOTE_JOBS', '2')))
+    except (TypeError, ValueError):
+        return 2
+
+
+# Characters that would not survive a workflow input + shell word split.
+_UNSAFE_ARG_CHARS = set(' \t\r\n"\'$`;&|<>(){}[]*?!~#\\')
+
+
+def _args_are_safe(args):
+    """
+    True when every argument can travel through a workflow input and a
+    shell word-split unchanged.  Anything unusual keeps the scan local
+    rather than risking a mangled command line on the runner.
+    """
+    return all(arg and not (set(arg) & _UNSAFE_ARG_CHARS) for arg in args)
+
+
 class SemgrepScanner:
-    def __init__(self, project_path):
+    def __init__(self, project_path, project=None):
         self.project_path = project_path
+        # The Project row (when known) lets the scanner mint a signed
+        # archive link for the GitHub Actions runner.
+        self.project = project
+
+    def _scan_with_github_actions(self):
+        """
+        Dispatch this scan to GitHub Actions and return its result dict.
+
+        Raises :class:`scans.services.github_actions.GitHubActionsError`
+        on any transport or protocol problem — ``scan()`` falls back to the
+        local install when that happens.
+        """
+        from .archive_link import build_archive_url
+
+        config = _remote_config()
+        if config is None:
+            return {
+                'error': 'CODEGUARD_SEMGREP_CONFIG points at a local file; remote '
+                         'scanning needs a registry config such as p/default.',
+            }
+
+        archive_url = build_archive_url(self.project)
+        if not archive_url:
+            return {
+                'error': 'CODEGUARD_PUBLIC_API_BASE is not set; the GitHub Actions '
+                         'runner does not know where to fetch the archive from.',
+            }
+
+        args = _command_args(config, _remote_jobs(), 0)
+        if not _args_are_safe(args):
+            return {'error': 'Remote Semgrep arguments contain unsupported characters.'}
+
+        scan_id = f'{self.project.pk}-{int(time.time())}'
+        timeout = timeout_for(self.project_path) + REMOTE_SETUP_SLACK_SECONDS
+        github_actions.dispatch(scan_id=scan_id, archive_url=archive_url, args=' '.join(args))
+        payload = github_actions.wait_for_result(scan_id, timeout_seconds=timeout)
+
+        try:
+            data = json.loads(payload.get('stdout') or '')
+        except json.JSONDecodeError:
+            return {
+                'error': 'GitHub Actions returned unusable Semgrep output: '
+                         + _stderr_tail(payload.get('stderr'), 600),
+                'exit_code': payload.get('exit_code'),
+                'run_url': payload.get('run_url'),
+            }
+        return _summarize(data, payload.get('exit_code'))
 
     def scan(self):
+        # Remote first: when GitHub Actions is configured, that is the
+        # point (its runners have the memory this machine lacks).  Every
+        # remote problem falls through to a local install if one exists,
+        # so enabling the feature can never make a scan worse.
+        remote_failure = None
+        if self.project is not None and github_actions.enabled():
+            try:
+                remote_result = self._scan_with_github_actions()
+            except github_actions.GitHubActionsError as exc:
+                remote_result = {'error': str(exc)}
+            except Exception as exc:  # noqa: BLE001 — remote must never crash a scan
+                remote_result = {'error': f'GitHub Actions scan failed: {exc}'}
+
+            if not remote_result.get('error'):
+                return remote_result
+            remote_failure = remote_result
+            logger.warning(
+                'Remote Semgrep run failed (%s) — trying the local install',
+                remote_result.get('error'),
+            )
+
         semgrep_exe = _find_semgrep()
         if not semgrep_exe:
+            if remote_failure:
+                # Remote was configured but broke and there is no local
+                # fallback: report the remote error (a real failure — the
+                # scanner was available, it just did not complete).
+                return remote_failure
             return {
                 'error': 'semgrep executable not found. Install it with "pip install semgrep" '
                          'or set the CODEGUARD_SEMGREP_BIN environment variable.',
@@ -348,20 +504,7 @@ class SemgrepScanner:
                         'raw_output': _stderr_tail(stderr_str),
                     }
 
-            results = data.get('results', [])
-
-            severity_counts = {'INFO': 0, 'WARNING': 0, 'ERROR': 0}
-            for finding in results:
-                severity = finding.get('extra', {}).get('severity', 'INFO')
-                if severity in severity_counts:
-                    severity_counts[severity] += 1
-
-            return {
-                'total_vulnerabilities': len(results),
-                'severity_counts': severity_counts,
-                'all_vulnerabilities': results,
-                'exit_code': result.returncode,
-            }
+            return _summarize(data, result.returncode)
 
         except Exception as e:
             return {'error': str(e)}

@@ -272,7 +272,7 @@ def process_scan(scan_id, worker_id):
                     result={'validation': validation, 'scans': scans_data},
                 )
 
-            runner = ScannerRunner(extract_dir, scan.scanners)
+            runner = ScannerRunner(extract_dir, scan.scanners, project=scan.project)
             scan_results = runner.run_all(on_progress=on_progress)
 
             # 4. Classify outcomes and choose the terminal status.

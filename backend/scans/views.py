@@ -1,17 +1,19 @@
 from urllib.parse import unquote
 
+from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.generics import ListAPIView, RetrieveAPIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.utils import timezone
 
 from .models import Scan, Project
 from .serializers import ScanSerializer
 from projects.utils.zip_validator import InvalidZipArchive, inspect_zip
 from projects.utils.archive import local_archive_path
+from .services.archive_link import resolve_project
 from .services.scanner_runner import scanner_availability, SUPPORTED_SCANNERS
 from .services.scan_worker import scan_worker_snapshot
 from .services.worker_launcher import ensure_worker_running
@@ -22,6 +24,7 @@ from .services.ai_explanation import generate_explanation
 from .services.ai_provider import AIProviderError, AIProviderRateLimitError
 
 import logging
+import os
 import uuid
 
 logger = logging.getLogger('scans.worker')
@@ -91,6 +94,47 @@ class ScannerAvailabilityView(APIView):
 
     def get(self, request):
         return Response(scanner_availability(), status=status.HTTP_200_OK)
+
+
+class ArchiveDownloadView(APIView):
+    """
+    Stream a project's ZIP archive to a caller holding a signed token.
+
+    Used by the GitHub Actions Semgrep runner (see
+    ``scans/services/archive_link.py``): the scan worker mints a
+    short-lived link, passes it to the workflow as an input, and the runner
+    fetches the archive here without needing a user login.  The token is
+    the only credential — it expires after
+    ``CODEGUARD_ARCHIVE_TOKEN_MAX_AGE`` seconds and cannot be forged
+    without ``DJANGO_SECRET_KEY``.
+
+    Every failure mode answers 404: an expired or bogus token must not
+    reveal whether the archive exists.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        project = resolve_project(request.query_params.get('token'))
+        if project is None:
+            return Response(
+                {'error': 'Invalid or expired archive link.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            file_handle = project.zip_file.open('rb')
+        except Exception:  # noqa: BLE001 — missing file, dead storage, …
+            logger.warning('Archive download failed for project %s', project.pk, exc_info=True)
+            return Response({'error': 'Archive not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        filename = os.path.basename(project.zip_file.name or 'project.zip')
+        return FileResponse(
+            file_handle,
+            as_attachment=True,
+            filename=filename,
+            content_type='application/zip',
+        )
 
 
 class StartScanView(APIView):

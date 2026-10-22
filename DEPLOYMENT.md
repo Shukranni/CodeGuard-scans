@@ -190,8 +190,7 @@ Semgrep is installed automatically by the `render.yaml` build command as a
 best-effort step (`pip install --no-cache-dir semgrep || echo …`): if it fits
 on the instance it runs with small-host guardrails; if it does not, the build
 still succeeds and scans report it as *skipped*. For heavy, always-on
-semgrep use at least 1 GB RAM (`pip install -r requirements.txt` in the
-build, or the free Hugging Face Spaces option in §7).
+semgrep at no cost, let GitHub run it for you instead — see §8.
 
 ---
 
@@ -237,3 +236,82 @@ python manage.py runscanworker
 
 No `DATABASE_URL` → SQLite; no `AWS_*` → archives on local disk. Nothing in
 §2–§4 is needed to develop.
+
+---
+
+## 8. Semgrep on GitHub Actions (free offload)
+
+The 512 MB free instance can run Semgrep, but only just. Instead of
+squeezing it onto the box, the scan worker can hand Semgrep to GitHub's CI
+runners (2 cores / 7 GB of RAM) through the workflow committed at
+`.github/workflows/semgrep-scan.yml`:
+
+1. The worker signs a short-lived download link for the uploaded archive
+   (`/api/scans/archive/?token=...`) and queues the workflow with
+   `workflow_dispatch`.
+2. The runner downloads the archive, installs Semgrep, scans, and uploads a
+   `semgrep-output` artifact (JSON, kept for 1 day).
+3. The worker polls the run, downloads the artifact and parses it with the
+   same code path as a local run.
+
+Every failure along that road (token expired, GitHub unreachable, workflow
+missing) falls back to the local Semgrep if one is installed — enabling the
+offload can never make a scan worse.
+
+### Setup (all free, about 5 minutes)
+
+1. **Create a token**: github.com -> Settings -> Developer settings ->
+   Personal access tokens -> Tokens (classic) -> Generate new token.
+   Scope: only **`repo`**. No billing setup is required — for a **public**
+   repository Actions minutes are unlimited and free; a **private**
+   repository gets 2,000 minutes/month on the GitHub Free plan (one scan
+   uses roughly 1-3 minutes).
+2. **Set three environment variables** on the `codeguard-api` service
+   (Render dashboard -> Environment -> save; the service redeploys):
+
+   | Variable | Value |
+   | --- | --- |
+   | `CODEGUARD_GITHUB_TOKEN` | the token from step 1 |
+   | `CODEGUARD_GITHUB_ACTIONS_REPO` | `OWNER/REPO`, e.g. `Shukranni/CodeGuard-scans` |
+   | `CODEGUARD_PUBLIC_API_BASE` | the public API URL without trailing slash, e.g. `https://codeguard-api-xqj2.onrender.com` |
+
+   That is all — `render.yaml` already lists the three keys with
+   `sync: false`.
+3. **Verify**: run a scan and open the repository's Actions tab; the
+   *CodeGuard Semgrep scan* run appears within seconds. `GET
+   /api/scans/scanners/` then reports semgrep with the hint
+   *Runs on GitHub Actions*.
+
+The workflow file must sit **on the default branch** (`main`) — that is how
+GitHub resolves `workflow_dispatch`.
+
+### Optional knobs
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CODEGUARD_SEMGREP_CONFIG` | `p/default` | Registry config the runner uses (`p/security-audit`, `p/ci`, or an https URL). Local file paths stay on the worker, so they disable the offload. |
+| `CODEGUARD_SEMGREP_REMOTE_JOBS` | `2` | Semgrep workers on the 2-core runner. |
+| `CODEGUARD_SEMGREP_REMOTE_SLACK` | `300` | Extra seconds on top of the normal timeout for runner boot and install. |
+| `CODEGUARD_ARCHIVE_TOKEN_MAX_AGE` | `900` | Lifespan of the signed archive link, in seconds. |
+| `CODEGUARD_GITHUB_ACTIONS_WORKFLOW` | `semgrep-scan.yml` | Workflow file name. |
+| `CODEGUARD_GITHUB_ACTIONS_REF` | `main` | Branch to dispatch against. |
+| `CODEGUARD_GITHUB_POLL_SECONDS` | `5` | Polling interval while waiting for the run. |
+
+### Privacy note (public repositories)
+
+Workflow inputs are visible to anyone who can view the repository's Actions
+runs — including the signed archive link. The link expires after
+`CODEGUARD_ARCHIVE_TOKEN_MAX_AGE` (15 minutes by default) and grants access
+to exactly one project archive while it is valid. If the scanned code itself
+is sensitive, use a **private** repository instead: inputs stay hidden, and
+the 2,000 free minutes still allow roughly 600-1,000 scans per month.
+
+### If a scan reports that semgrep failed
+
+| Symptom | Cause / fix |
+| --- | --- |
+| `Could not queue the Semgrep workflow: HTTP 404` | `CODEGUARD_GITHUB_ACTIONS_REPO` wrong, token lacks access, or `.github/workflows/semgrep-scan.yml` is not on `main`. |
+| `HTTP 401/403` | Token expired or created without the `repo` scope. |
+| `Timed out ... waiting for the Semgrep run` | Open the Actions tab — the run may be queued, or Actions may be disabled for the repository. |
+| `produced no semgrep-output artifact` | The run failed before Semgrep finished — read the run's step logs. |
+| `Invalid or expired archive link` in the run log | `CODEGUARD_PUBLIC_API_BASE` points at the wrong host or the link expired. The worker falls back to local semgrep automatically either way. |

@@ -4,6 +4,7 @@ from .views import (
     ScanDetailView,
     ScanStatusView,
     ScannerAvailabilityView,
+    ArchiveDownloadView,
     ResolveScanView,
     DismissFindingView,
     DashboardOverviewView,
@@ -16,6 +17,10 @@ urlpatterns = [
     path('', ScanListView.as_view(), name='scan-list'),
     path('overview/', DashboardOverviewView.as_view(), name='dashboard-overview'),
     path('scanners/', ScannerAvailabilityView.as_view(), name='scanner-availability'),
+    # Signed, short-lived archive hand-off for the GitHub Actions runner.
+    # Declared before the ``<int:pk>/`` routes for readability (it could
+    # not match them anyway — "archive" is not an integer).
+    path('archive/', ArchiveDownloadView.as_view(), name='archive-download'),
     path('start/', StartScanView.as_view(), name='start-scan'),
     path('<int:pk>/', ScanDetailView.as_view(), name='scan-detail'),
     path('<int:pk>/status/', ScanStatusView.as_view(), name='scan-status'),
