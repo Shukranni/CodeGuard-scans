@@ -262,10 +262,11 @@ offload can never make a scan worse.
 
 1. **Create a token**: github.com -> Settings -> Developer settings ->
    Personal access tokens -> Tokens (classic) -> Generate new token.
-   Scope: only **`repo`**. No billing setup is required — for a **public**
-   repository Actions minutes are unlimited and free; a **private**
-   repository gets 2,000 minutes/month on the GitHub Free plan (one scan
-   uses roughly 1-3 minutes).
+   Scope: only **`repo`** — CodeGuard dispatches workflows and reads
+   artifacts, it never modifies your repository. No billing setup is
+   required — for a **public** repository Actions minutes are unlimited
+   and free; a **private** repository gets 2,000 minutes/month on the
+   GitHub Free plan (one scan uses roughly 1-3 minutes).
 2. **Set three environment variables** on the `codeguard-api` service
    (Render dashboard -> Environment -> save; the service redeploys):
 
