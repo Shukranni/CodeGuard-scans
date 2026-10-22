@@ -316,3 +316,4 @@ the 2,000 free minutes still allow roughly 600-1,000 scans per month.
 | `Timed out ... waiting for the Semgrep run` | Open the Actions tab — the run may be queued, or Actions may be disabled for the repository. |
 | `produced no semgrep-output artifact` | The run failed before Semgrep finished — read the run's step logs. |
 | `Invalid or expired archive link` in the run log | `CODEGUARD_PUBLIC_API_BASE` points at the wrong host or the link expired. The worker falls back to local semgrep automatically either way. |
+| The `Set up Python` step fails with `No file in ... matched to [**/requirements.txt or **/pyproject.toml]` | `actions/setup-python` was given `cache: pip`, but the job never checks out the repository (the sources arrive as an archive), so there is no dependency file to hash. Leave the cache out — the workflow only runs `pip install semgrep`. |

@@ -53,6 +53,11 @@ STDOUT_FILE = 'semgrep.json'
 EXIT_CODE_FILE = 'rc.txt'
 STDERR_FILE = 'err.txt'
 
+# The artifacts endpoint can lag a heartbeat behind the ``completed``
+# status, so a missing artifact is retried briefly before giving up.
+ARTIFACT_RETRY_ATTEMPTS = 3
+ARTIFACT_RETRY_SECONDS = 3.0
+
 # How far back a dispatched run may have been created and still be
 # considered "ours" when no scan-id tag matches (absorbs clock skew
 # between this machine and GitHub).
@@ -248,26 +253,37 @@ def wait_for_result(scan_id, timeout_seconds):
     return _download_result(run, run_url)
 
 
-def _download_result(run, run_url):
-    response = requests.get(
-        _repo_url(f"/actions/runs/{run.get('id')}/artifacts"),
-        headers=_headers(),
-        timeout=DEFAULT_HTTP_TIMEOUT,
-    )
-    _check(response, 'list run artifacts')
-
-    artifacts = [
-        item for item in response.json().get('artifacts') or []
-        if item.get('name') == ARTIFACT_NAME and not item.get('expired')
-    ]
-    if not artifacts:
-        raise GitHubActionsError(
-            f'Semgrep run finished but produced no {ARTIFACT_NAME} artifact: {run_url}'
+def _wait_for_artifact(run, run_url):
+    """Return the run's Semgrep artifact, tolerating a short publish lag."""
+    deadline = time.monotonic() + ARTIFACT_RETRY_ATTEMPTS * ARTIFACT_RETRY_SECONDS
+    while True:
+        response = requests.get(
+            _repo_url(f"/actions/runs/{run.get('id')}/artifacts"),
+            headers=_headers(),
+            timeout=DEFAULT_HTTP_TIMEOUT,
         )
+        _check(response, 'list run artifacts')
+
+        artifacts = [
+            item for item in response.json().get('artifacts') or []
+            if item.get('name') == ARTIFACT_NAME and not item.get('expired')
+        ]
+        if artifacts:
+            return artifacts[0]
+
+        if time.monotonic() >= deadline:
+            raise GitHubActionsError(
+                f'Semgrep run finished but produced no {ARTIFACT_NAME} artifact: {run_url}'
+            )
+        time.sleep(ARTIFACT_RETRY_SECONDS)
+
+
+def _download_result(run, run_url):
+    artifact = _wait_for_artifact(run, run_url)
 
     try:
         download = requests.get(
-            artifacts[0]['archive_download_url'],
+            artifact['archive_download_url'],
             headers=_headers(),
             timeout=DEFAULT_HTTP_TIMEOUT,
         )
@@ -291,6 +307,14 @@ def _download_result(run, run_url):
             rc_text = read(EXIT_CODE_FILE).strip()
     except zipfile.BadZipFile as exc:
         raise GitHubActionsError(f'Unreadable Semgrep result artifact: {exc}') from exc
+
+    if not stdout.strip():
+        # Never hand empty output to the parser: it would downgrade a broken
+        # workflow to "no findings" or an opaque fallback.
+        raise GitHubActionsError(
+            f'The {ARTIFACT_NAME} artifact has no {STDOUT_FILE} ({run_url}) — the '
+            'workflow and the worker disagree about the file it writes.'
+        )
 
     try:
         exit_code = int(rc_text) if rc_text else None

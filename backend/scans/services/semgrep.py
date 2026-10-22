@@ -443,13 +443,28 @@ class SemgrepScanner:
                 remote_result.get('error'),
             )
 
+        local_result = self._scan_local()
+
+        if local_result.get('unavailable') and remote_failure:
+            # Remote was configured but broke and there is no local
+            # fallback: report the remote error (a real failure — the
+            # scanner was available, it just did not complete).
+            return remote_failure
+
+        if remote_failure and local_result.get('error'):
+            # Say why the remote route failed too, otherwise the report
+            # only blames the fallback and hides the real problem.
+            local_result = dict(local_result)
+            local_result['error'] = (
+                f"{local_result['error']} (the GitHub Actions attempt failed "
+                f"too: {remote_failure.get('error')})"
+            )
+        return local_result
+
+    def _scan_local(self):
+        """Run the locally installed Semgrep — the fallback path."""
         semgrep_exe = _find_semgrep()
         if not semgrep_exe:
-            if remote_failure:
-                # Remote was configured but broke and there is no local
-                # fallback: report the remote error (a real failure — the
-                # scanner was available, it just did not complete).
-                return remote_failure
             return {
                 'error': 'semgrep executable not found. Install it with "pip install semgrep" '
                          'or set the CODEGUARD_SEMGREP_BIN environment variable.',

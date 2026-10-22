@@ -101,7 +101,9 @@ jobs:
           # usable JSON that the worker parses.
           cd "$src"
           set +e
-          semgrep scan $SEMGREP_ARGS . > /tmp/out.json 2> /tmp/err.txt
+          # semgrep.json is the name github_actions.STDOUT_FILE expects —
+          # keep both in sync, or the worker sees an empty result.
+          semgrep scan $SEMGREP_ARGS . > /tmp/semgrep.json 2> /tmp/err.txt
           rc=$?
           set -e
           echo "$rc" > /tmp/rc.txt
@@ -113,7 +115,7 @@ jobs:
         with:
           name: semgrep-output
           path: |
-            /tmp/out.json
+            /tmp/semgrep.json
             /tmp/rc.txt
             /tmp/err.txt
           if-no-files-found: ignore

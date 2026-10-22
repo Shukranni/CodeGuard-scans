@@ -1995,6 +1995,26 @@ class SemgrepRemoteScanTests(SimpleTestCase):
         # Remote was configured (available) but broke — not a missing tool.
         self.assertFalse(result.get('unavailable'))
 
+    def test_a_failed_fallback_reports_the_remote_error_too(self):
+        scanner = self.module.SemgrepScanner(self.project, project=mock.Mock(pk=7))
+
+        with mock.patch.dict(os.environ, GITHUB_ENV_ON), \
+                mock.patch.object(
+                    self.module.github_actions, 'dispatch',
+                    side_effect=self.module.github_actions.GitHubActionsError('GitHub is down'),
+                ), \
+                mock.patch.object(self.module, '_find_semgrep', return_value='semgrep.exe'), \
+                mock.patch.object(self.module, 'rules_config', return_value='p/default'), \
+                mock.patch.object(
+                    self.module.subprocess, 'run',
+                    side_effect=self.module.subprocess.TimeoutExpired('semgrep', 300),
+                ):
+            result = scanner.scan()
+
+        # Both failures are named, otherwise the report hides the real cause.
+        self.assertIn('timed out', result['error'])
+        self.assertIn('GitHub is down', result['error'])
+
     def test_unusable_remote_output_is_reported_with_the_stderr_tail(self):
         scanner = self.module.SemgrepScanner(self.project, project=mock.Mock(pk=7))
 
@@ -2177,6 +2197,77 @@ class GitHubActionsProtocolTests(SimpleTestCase):
         message = str(ctx.exception)
         self.assertIn('failure', message)
         self.assertIn('actions/runs/78', message)
+
+    def test_a_late_artifact_is_retried(self):
+        from .services import github_actions
+
+        run = {
+            'id': 80,
+            'status': 'completed',
+            'conclusion': 'success',
+            'html_url': 'https://github.com/octo/repo/actions/runs/80',
+        }
+        listed = dict(
+            run, name='CodeGuard Semgrep scan',
+            display_title='CodeGuard scan 5-126', created_at=self._now_iso(),
+        )
+        responses = [
+            self._response(200, {'workflow_runs': [listed]}),
+            self._response(200, run),
+            # The artifacts endpoint lags the "completed" status by a beat.
+            self._response(200, {'artifacts': []}),
+            self._response(200, {'artifacts': [{
+                'name': 'semgrep-output',
+                'expired': False,
+                'archive_download_url': 'https://api.github.com/artifacts/2/zip',
+            }]}),
+            self._response(200, content=self._artifact_zip()),
+        ]
+
+        with mock.patch.dict(os.environ, self.ENV), \
+                mock.patch.object(
+                    github_actions.requests, 'get', side_effect=responses,
+                ), \
+                mock.patch.object(github_actions.time, 'sleep'):
+            payload = github_actions.wait_for_result('5-126', timeout_seconds=30)
+
+        self.assertEqual(payload['exit_code'], 0)
+        self.assertIn('results', json.loads(payload['stdout']))
+
+    def test_an_artifact_without_the_expected_file_is_an_error(self):
+        from .services import github_actions
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            archive.writestr('rc.txt', '0')
+            archive.writestr('err.txt', '')
+        run = {
+            'id': 81,
+            'status': 'completed',
+            'conclusion': 'success',
+            'html_url': 'https://github.com/octo/repo/actions/runs/81',
+        }
+        responses = [
+            self._response(200, {'workflow_runs': [dict(
+                run, name='CodeGuard Semgrep scan',
+                display_title='CodeGuard scan 5-127', created_at=self._now_iso(),
+            )]}),
+            self._response(200, run),
+            self._response(200, {'artifacts': [{
+                'name': 'semgrep-output',
+                'expired': False,
+                'archive_download_url': 'https://api.github.com/artifacts/3/zip',
+            }]}),
+            self._response(200, content=buffer.getvalue()),
+        ]
+
+        with mock.patch.dict(os.environ, self.ENV), \
+                mock.patch.object(github_actions.requests, 'get', side_effect=responses):
+            with self.assertRaises(github_actions.GitHubActionsError) as ctx:
+                github_actions.wait_for_result('5-127', timeout_seconds=30)
+
+        # A silently empty result would surface as a bogus "no findings".
+        self.assertIn('semgrep.json', str(ctx.exception))
 
     def test_waiting_gives_up_after_the_timeout(self):
         from .services import github_actions
