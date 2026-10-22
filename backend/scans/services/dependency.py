@@ -1,0 +1,151 @@
+import subprocess
+import json
+import os
+import shutil
+
+DEPENDENCY_TIMEOUT = 120
+
+# Cached executable lookup so availability is not re-resolved for every scan.
+_NPM_EXE_CACHE = None
+
+
+def _find_npm():
+    global _NPM_EXE_CACHE
+    if _NPM_EXE_CACHE is None:
+        _NPM_EXE_CACHE = shutil.which('npm') or False
+    return _NPM_EXE_CACHE or None
+
+
+def reset_npm_cache():
+    global _NPM_EXE_CACHE
+    _NPM_EXE_CACHE = None
+
+
+def npm_available():
+    return _find_npm() is not None
+
+
+class DependencyScanner:
+    def __init__(self, project_path):
+        self.project_path = project_path
+
+    def scan(self):
+        try:
+            if not _find_npm():
+                return {
+                    'error': 'npm executable not found. Install Node.js and ensure npm is on PATH.',
+                    'unavailable': True,
+                }
+
+            # Recursively locate a lockfile-backed npm project.  ``npm audit``
+            # requires a lockfile; a directory with only ``package.json`` would
+            # fail with "requires an existing lockfile".  So we search for a
+            # package-lock.json specifically, and only fall back to
+            # package.json to report a meaningful "skipped" reason.
+            scan_dir = None
+            json_only_dir = None
+            for root, dirs, files in os.walk(self.project_path):
+                # Ignore common big directories in search
+                for d in list(dirs):
+                    if d.lower() in {'node_modules', '.git', '.venv', 'venv', 'env'}:
+                        dirs.remove(d)
+                if 'package-lock.json' in files:
+                    scan_dir = root
+                    break
+                if 'package.json' in files and json_only_dir is None:
+                    json_only_dir = root
+
+            if scan_dir is None:
+                # No lockfile to audit.  This is not a scanner failure — the
+                # audit simply cannot run.  Reported as "skipped" so the scan
+                # is not wrongly downgraded to completed_with_warnings.
+                if json_only_dir is not None:
+                    reason = ('Found package.json but no package-lock.json. '
+                              'npm audit requires a lockfile; skipping dependency audit.')
+                else:
+                    reason = 'No package.json or package-lock.json found. Skipping dependency audit.'
+                return {'skipped': True, 'reason': reason}
+
+            # On Windows, npm is a .cmd script so we need shell=True.
+            # Capture raw bytes and decode with errors='replace' to avoid
+            # charmap encoding crashes on Windows.
+            result = subprocess.run(
+                ['npm', 'audit', '--json'],
+                cwd=scan_dir,
+                capture_output=True,
+                shell=True,
+                timeout=DEPENDENCY_TIMEOUT
+            )
+            stdout_str = result.stdout.decode('utf-8', errors='replace')
+            stderr_str = result.stderr.decode('utf-8', errors='replace')
+
+            # npm audit returns non-zero exit code when vulnerabilities exist.
+            # We still want to parse the JSON if possible.
+            try:
+                data = json.loads(stdout_str)
+            except json.JSONDecodeError:
+                lowered = stderr_str.lower()
+                if 'is not recognized' in lowered or 'command not found' in lowered:
+                    return {
+                        'error': 'npm executable not found. Install Node.js and ensure npm is on PATH.',
+                        'unavailable': True,
+                    }
+                return {
+                    'error': 'Failed to parse npm audit output',
+                    'exit_code': result.returncode,
+                    'raw_output': stderr_str[:500]
+                }
+
+            # npm can emit a JSON error object.  A missing/invalid lockfile is
+            # not a scanner failure — audit simply does not apply — so it is
+            # reported as "skipped", not "error".
+            if isinstance(data, dict) and data.get('error'):
+                err = data['error']
+                summary = (err.get('summary') if isinstance(err, dict) else None) or 'unknown error'
+                if 'lockfile' in str(summary).lower():
+                    return {
+                        'skipped': True,
+                        'reason': f'npm audit cannot run: {summary}',
+                    }
+                return {
+                    'error': f'npm audit failed: {summary}',
+                    'exit_code': result.returncode,
+                }
+
+            # Extract vulnerabilities
+            vulnerabilities = data.get('vulnerabilities', {})
+            
+            # Count by severity
+            severity_counts = {
+                'low': 0,
+                'moderate': 0,
+                'high': 0,
+                'critical': 0
+            }
+            
+            for vuln in vulnerabilities.values():
+                vuln_severity = vuln.get('severity', 'low') if isinstance(vuln, dict) else 'low'
+                if vuln_severity in severity_counts:
+                    severity_counts[vuln_severity] += 1
+            
+            return {
+                'total_vulnerabilities': len(vulnerabilities),
+                'severity_counts': severity_counts,
+                'all_vulnerabilities': vulnerabilities,
+                'summary': data.get('metadata', {}).get('summary', 'No summary available'),
+                'exit_code': result.returncode,
+            }
+
+        except FileNotFoundError:
+            return {
+                'error': 'npm not found. Please install Node.js and npm (ensure npm.cmd is on PATH).',
+                'unavailable': True,
+            }
+        except subprocess.TimeoutExpired:
+            return {
+                'error': f'Dependency scan timed out after {DEPENDENCY_TIMEOUT} seconds.'
+            }
+        except Exception as e:
+            return {
+                'error': str(e)
+            }

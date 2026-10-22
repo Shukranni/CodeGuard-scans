@@ -1,0 +1,560 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   CodeGuard design tokens
+   ----------------------------------------------------------------------------
+   Every theme colour is stored as raw RGB channels so Tailwind can apply
+   opacity modifiers (`bg-primary/10`, `text-critical/80`, …). The resolved
+   `--color-*` variables are derived from the channels below.
+
+   Palette
+     surfaces   charcoal / slate / off-white, flat and quiet
+     primary    restrained emerald-teal — actions, focus, active navigation
+     accent     sky — informational and AI surfaces
+     secondary  slate — neutral supporting UI
+     severity   red = critical, amber = high, blue = medium, emerald = low
+   Severity is never communicated by colour alone: every badge also carries
+   a label and an icon (see `src/components/ui/SeverityBadge.jsx`).
+   ========================================================================== */
+
+@layer base {
+  :root {
+    /* -- RGB channel triplets (single source of truth) ------------------- */
+    --color-primary-rgb: 15 118 110;        /* teal-700  */
+    --color-secondary-rgb: 71 85 105;       /* slate-600 */
+    --color-accent-rgb: 2 132 199;          /* sky-600   */
+    --color-background-rgb: 246 247 249;    /* off-white */
+    --color-foreground-rgb: 15 23 42;       /* slate-900 */
+    --color-surface-rgb: 255 255 255;       /* white     */
+    --color-surface-foreground-rgb: 15 23 42;
+    --color-card-rgb: 255 255 255;
+    --color-card-foreground-rgb: 15 23 42;
+    --color-popover-rgb: 255 255 255;
+    --color-popover-foreground-rgb: 15 23 42;
+    --color-muted-rgb: 238 241 245;         /* slate-100 */
+    --color-muted-foreground-rgb: 90 103 121;
+    --color-border-rgb: 15 23 42;           /* slate-900 */
+    --color-input-rgb: 216 222 232;
+    --color-ring-rgb: 15 118 110;
+
+    /* Semantic status */
+    --color-success-rgb: 4 120 87;          /* emerald-700 */
+    --color-warning-rgb: 180 83 9;          /* amber-700  */
+    --color-error-rgb: 185 28 28;           /* red-700    */
+    --color-destructive-rgb: 185 28 28;
+
+    /* Semantic severity (must stay in sync with `error`/`warning`/`success`) */
+    --color-critical-rgb: 185 28 28;        /* red-700    */
+    --color-high-rgb: 180 83 9;             /* amber-700  */
+    --color-medium-rgb: 29 78 216;          /* blue-700   */
+    --color-low-rgb: 4 120 87;              /* emerald-700 */
+    --color-info-rgb: 71 85 105;            /* slate-600  */
+
+    /* Foregrounds on solid fills */
+    --color-primary-foreground-rgb: 255 255 255;
+    --color-secondary-foreground-rgb: 255 255 255;
+    --color-accent-foreground-rgb: 255 255 255;
+    --color-success-foreground-rgb: 255 255 255;
+    --color-warning-foreground-rgb: 255 255 255;
+    --color-error-foreground-rgb: 255 255 255;
+    --color-destructive-foreground-rgb: 255 255 255;
+
+    /* Default alpha of the `border` colour (kept deliberately subtle) */
+    --color-border-alpha: 0.09;
+
+    /* -- Resolved colours --------------------------------------------- */
+    --color-primary: rgb(var(--color-primary-rgb));
+    --color-primary-foreground: rgb(var(--color-primary-foreground-rgb));
+    --color-secondary: rgb(var(--color-secondary-rgb));
+    --color-secondary-foreground: rgb(var(--color-secondary-foreground-rgb));
+    --color-accent: rgb(var(--color-accent-rgb));
+    --color-accent-foreground: rgb(var(--color-accent-foreground-rgb));
+    --color-background: rgb(var(--color-background-rgb));
+    --color-foreground: rgb(var(--color-foreground-rgb));
+    --color-surface: rgb(var(--color-surface-rgb));
+    --color-surface-foreground: rgb(var(--color-surface-foreground-rgb));
+    --color-card: rgb(var(--color-card-rgb));
+    --color-card-foreground: rgb(var(--color-card-foreground-rgb));
+    --color-popover: rgb(var(--color-popover-rgb));
+    --color-popover-foreground: rgb(var(--color-popover-foreground-rgb));
+    --color-muted: rgb(var(--color-muted-rgb));
+    --color-muted-foreground: rgb(var(--color-muted-foreground-rgb));
+    --color-border: rgb(var(--color-border-rgb) / var(--color-border-alpha));
+    --color-input: rgb(var(--color-input-rgb));
+    --color-ring: rgb(var(--color-ring-rgb));
+    --color-success: rgb(var(--color-success-rgb));
+    --color-success-foreground: rgb(var(--color-success-foreground-rgb));
+    --color-warning: rgb(var(--color-warning-rgb));
+    --color-warning-foreground: rgb(var(--color-warning-foreground-rgb));
+    --color-error: rgb(var(--color-error-rgb));
+    --color-error-foreground: rgb(var(--color-error-foreground-rgb));
+    --color-destructive: rgb(var(--color-destructive-rgb));
+    --color-destructive-foreground: rgb(var(--color-destructive-foreground-rgb));
+    --color-critical: rgb(var(--color-critical-rgb));
+    --color-high: rgb(var(--color-high-rgb));
+    --color-medium: rgb(var(--color-medium-rgb));
+    --color-low: rgb(var(--color-low-rgb));
+    --color-info: rgb(var(--color-info-rgb));
+
+    /* Typography */
+    --font-heading: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-body: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-caption: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-data: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+    /* Geometry */
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+
+    /* Spacing scale (4px base) */
+    --spacing-base: 4px;
+
+    /* Elevation */
+    --shadow-color: 15 23 42;
+  }
+
+  .dark {
+    --color-primary-rgb: 45 212 191;       /* teal-400   */
+    --color-secondary-rgb: 148 163 184;    /* slate-400  */
+    --color-accent-rgb: 56 189 248;        /* sky-400    */
+    --color-background-rgb: 10 15 26;      /* charcoal   */
+    --color-foreground-rgb: 230 234 240;   /* slate-200  */
+    --color-surface-rgb: 16 23 37;
+    --color-surface-foreground-rgb: 226 232 240;
+    --color-card-rgb: 18 26 43;
+    --color-card-foreground-rgb: 226 232 240;
+    --color-popover-rgb: 21 30 48;
+    --color-popover-foreground-rgb: 226 232 240;
+    --color-muted-rgb: 28 36 53;
+    --color-muted-foreground-rgb: 148 163 184;
+    --color-border-rgb: 148 163 184;
+    --color-input-rgb: 38 48 67;
+    --color-ring-rgb: 45 212 191;
+
+    --color-success-rgb: 52 211 153;       /* emerald-400 */
+    --color-warning-rgb: 251 191 36;       /* amber-400   */
+    --color-error-rgb: 248 113 113;        /* red-400     */
+    --color-destructive-rgb: 248 113 113;
+
+    --color-critical-rgb: 248 113 113;
+    --color-high-rgb: 251 191 36;
+    --color-medium-rgb: 96 165 250;         /* blue-400    */
+    --color-low-rgb: 52 211 153;
+    --color-info-rgb: 148 163 184;
+
+    --color-primary-foreground-rgb: 4 47 46;
+    --color-secondary-foreground-rgb: 15 23 42;
+    --color-accent-foreground-rgb: 8 47 73;
+    --color-success-foreground-rgb: 4 47 46;
+    --color-warning-foreground-rgb: 66 32 6;
+    --color-error-foreground-rgb: 69 10 10;
+    --color-destructive-foreground-rgb: 69 10 10;
+
+    --color-border-alpha: 0.14;
+
+    --shadow-color: 0 0 0;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  @media (max-width: 768px) {
+    body {
+      font-size: 15px;
+    }
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    letter-spacing: -0.014em;
+    text-wrap: balance;
+  }
+
+  h1 { font-size: 2rem; line-height: 1.2; }
+  h2 { font-size: 1.5rem; line-height: 1.25; }
+  h3 { font-size: 1.25rem; line-height: 1.35; }
+  h4 { font-size: 1.0625rem; line-height: 1.4; }
+  h5 { font-size: 1rem; line-height: 1.45; }
+
+  p {
+    max-width: 70ch;
+  }
+
+  code, pre, .font-mono, .font-data {
+    font-family: var(--font-data);
+    font-feature-settings: 'tnum' on, 'lnum' on;
+  }
+
+  small, .caption {
+    font-family: var(--font-caption);
+    @apply text-sm;
+    line-height: 1.45;
+  }
+
+  /* Visible, consistent focus ring for every interactive element. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--color-ring-rgb));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Remove the number input spinners — they are noise in dense forms. */
+  input[type='number']::-webkit-outer-spin-button,
+  input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+
+  ::selection {
+    background: rgb(var(--color-primary-rgb) / 0.22);
+  }
+
+  /* Scrollbars — thin and theme aware. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--color-border-rgb) / 0.35) transparent;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(var(--color-border-rgb) / 0.35);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--color-border-rgb) / 0.55);
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  /* ── App shell ───────────────────────────────────────────────────────── */
+  .app-shell {
+    @apply min-h-screen bg-background text-foreground;
+  }
+
+  .app-sidebar {
+    @apply fixed inset-y-0 left-0 z-40 w-64 -translate-x-full
+           border-r border-border bg-surface
+           transition-transform duration-200 ease-out lg:translate-x-0;
+  }
+  .app-sidebar.is-open {
+    @apply translate-x-0 shadow-2xl;
+  }
+
+  .app-sidebar-backdrop {
+    @apply fixed inset-0 z-30 bg-slate-950/50 backdrop-blur-sm lg:hidden;
+  }
+
+  .app-main {
+    @apply lg:pl-64 min-h-screen flex flex-col;
+  }
+
+  .app-header {
+    @apply sticky top-0 z-30 flex items-center gap-3
+           border-b border-border bg-background/85 backdrop-blur
+           px-4 py-3 md:px-6;
+  }
+
+  .app-content {
+    @apply flex-1 w-full px-4 py-6 md:px-6 md:py-8;
+  }
+
+  .app-content-flush {
+    @apply flex-1 w-full flex flex-col min-h-0;
+  }
+
+  /* ── Navigation ──────────────────────────────────────────────────────── */
+  .nav-section-label {
+    @apply px-3 pt-5 pb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground;
+  }
+
+  .nav-item {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium
+           text-muted-foreground transition-colors duration-150
+           hover:bg-muted hover:text-foreground;
+  }
+  .nav-item.is-active {
+    @apply bg-primary/10 text-primary hover:bg-primary/10 hover:text-primary;
+  }
+  .nav-item.is-active .nav-item-icon {
+    @apply text-primary;
+  }
+
+  .nav-item-icon {
+    @apply text-muted-foreground shrink-0;
+  }
+
+  /* ── Cards ───────────────────────────────────────────────────────────── */
+  .surface-card {
+    @apply rounded-xl border border-border bg-card text-card-foreground;
+  }
+
+  .surface-card-interactive {
+    @apply surface-card transition-all duration-150 ease-out hover:border-primary/40 hover:shadow-md;
+  }
+
+  /* ── Badges ──────────────────────────────────────────────────────────── */
+  .status-badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5
+           text-xs font-semibold leading-5 whitespace-nowrap;
+  }
+
+  .severity-badge {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5
+           text-xs font-semibold leading-5 whitespace-nowrap;
+  }
+
+  /* ── Modal ───────────────────────────────────────────────────────────── */
+  .modal-overlay {
+    @apply fixed inset-0 z-[1000] bg-slate-950/60 backdrop-blur-sm
+           flex items-center justify-center p-4;
+  }
+
+  .modal-content {
+    @apply bg-card rounded-xl border border-border shadow-2xl max-w-4xl w-full
+           max-h-[90vh] overflow-hidden flex flex-col;
+  }
+
+  .modal-header {
+    @apply flex items-start justify-between gap-4 p-5 border-b border-border;
+  }
+
+  .modal-title {
+    @apply text-lg font-semibold text-foreground;
+  }
+
+  .modal-close {
+    @apply p-2 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors;
+  }
+
+  .modal-body {
+    @apply p-5 overflow-y-auto flex-1;
+  }
+
+  .modal-footer {
+    @apply flex flex-wrap items-center justify-end gap-2 border-t border-border
+           bg-muted/30 px-5 py-3.5;
+  }
+
+  /* ── Progress ────────────────────────────────────────────────────────── */
+  .progress-container {
+    @apply w-full bg-muted rounded-full overflow-hidden;
+    height: 8px;
+  }
+
+  .progress-bar {
+    @apply h-full bg-primary transition-all duration-300 ease-out rounded-full;
+  }
+
+  .progress-bar.success { @apply bg-success; }
+  .progress-bar.warning { @apply bg-warning; }
+  .progress-bar.error   { @apply bg-error; }
+  .progress-bar.critical{ @apply bg-critical; }
+  .progress-bar.high    { @apply bg-high; }
+  .progress-bar.medium  { @apply bg-medium; }
+  .progress-bar.low     { @apply bg-low; }
+
+  /* ── Filter toolbar ──────────────────────────────────────────────────── */
+  .filter-toolbar {
+    @apply flex flex-wrap items-center gap-3;
+  }
+
+  .filter-toolbar-search {
+    @apply flex-1 min-w-[200px];
+  }
+
+  .filter-toolbar-actions {
+    @apply flex items-center gap-2;
+  }
+
+  /* ── Vulnerability card ──────────────────────────────────────────────── */
+  .vulnerability-card {
+    @apply surface-card p-4 transition-all duration-150 ease-out;
+  }
+
+  .vulnerability-card.severity-critical { @apply border-l-4 border-l-critical; }
+  .vulnerability-card.severity-high     { @apply border-l-4 border-l-high; }
+  .vulnerability-card.severity-medium   { @apply border-l-4 border-l-medium; }
+  .vulnerability-card.severity-low      { @apply border-l-4 border-l-low; }
+
+  /* ── Skeletons ───────────────────────────────────────────────────────── */
+  .skeleton {
+    @apply animate-pulse bg-muted rounded;
+  }
+
+  .skeleton-text   { @apply h-4 bg-muted rounded; }
+  .skeleton-title  { @apply h-6 bg-muted rounded; }
+  .skeleton-card   { @apply h-32 bg-muted rounded-xl; }
+
+  /* ── Tooltip ─────────────────────────────────────────────────────────── */
+  .tooltip {
+    @apply absolute z-[500] px-3 py-2 text-xs rounded-lg shadow-lg
+           bg-foreground text-background opacity-0 invisible pointer-events-none
+           transition-opacity duration-150;
+  }
+
+  .tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  /* ── Code ────────────────────────────────────────────────────────────── */
+  .code-surface {
+    @apply rounded-lg border border-border bg-muted/40 overflow-hidden;
+  }
+
+  .code-surface pre {
+    @apply overflow-x-auto text-xs leading-relaxed;
+    font-family: var(--font-data);
+  }
+
+  /* ── Profile ─────────────────────────────────────────────────────────── */
+  .profile-card {
+    @apply surface-card p-6 md:p-8;
+  }
+
+  .profile-avatar {
+    @apply w-20 h-20 rounded-full bg-primary/10 text-primary flex items-center
+           justify-center flex-shrink-0 text-2xl font-semibold;
+  }
+
+  /* ── Legacy nav (kept so older markup still renders correctly) ──────── */
+  .primary-nav {
+    @apply fixed top-0 left-0 right-0 z-[100] bg-background border-b border-border;
+    height: 64px;
+  }
+
+  .primary-nav-container {
+    @apply h-full max-w-7xl mx-auto px-4 flex items-center justify-between;
+  }
+
+  .primary-nav-logo {
+    @apply flex items-center gap-3 no-underline;
+  }
+
+  .primary-nav-logo-text {
+    @apply text-lg font-semibold text-foreground;
+  }
+
+  .primary-nav-mobile-menu {
+    @apply fixed inset-0 z-[200] backdrop-blur-sm lg:hidden flex flex-col;
+  }
+}
+
+@layer utilities {
+  /* Legacy utility aliases used across the codebase. */
+  .transition-smooth {
+    transition-property: color, background-color, border-color, fill, stroke,
+      box-shadow, opacity, transform;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms;
+  }
+
+  .overflow-elegant {
+    scrollbar-width: thin;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .progress-ring {
+    position: relative;
+    overflow: hidden;
+  }
+  .progress-ring::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgb(255 255 255 / 0.28) 50%,
+      transparent 100%
+    );
+    transform: translateX(-100%);
+    animation: progress-sheen 2.4s ease-in-out infinite;
+  }
+
+  .text-balance { text-wrap: balance; }
+  .text-pretty { text-wrap: pretty; }
+}
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+@keyframes progress-sheen {
+  0%   { transform: translateX(-100%); }
+  60%  { transform: translateX(100%); }
+  100% { transform: translateX(100%); }
+}
+
+@keyframes cg-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes cg-scale-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes cg-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes cg-spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-fade-in { animation: cg-fade-in 150ms ease-out both; }
+.animate-scale-in { animation: cg-scale-in 150ms ease-out both; }
+.animate-slide-up { animation: cg-slide-up 200ms ease-out both; }
+.animate-spin-slow { animation: cg-spin 1.4s linear infinite; }
+
+/* ── Reduced motion ─────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .progress-ring::after {
+    animation: none;
+    display: none;
+  }
+}

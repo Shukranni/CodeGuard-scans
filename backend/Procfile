@@ -1,0 +1,17 @@
+# Process definition for hosts that read a Procfile (Heroku, `heroku local`,
+# Railway, dokku…).  Render uses `startCommand` in render.yaml instead, which
+# runs the same script.
+#
+# The combined start script runs the Django API *and* the background scan
+# worker in the SAME container.  That is required on free tiers, which do not
+# offer a separate "Background Worker" service, and it also means the worker
+# shares the filesystem with the API (uploaded archives).
+#
+# Paths are relative to this directory (`backend/`).
+
+web: bash scripts/start_with_worker.sh
+
+# Hosts that DO provide a separate worker process (paid dynos, Render paid
+# Background Worker, etc.) can instead split the two:
+#   web:    gunicorn backend.wsgi:application --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 300
+#   worker: python manage.py runscanworker

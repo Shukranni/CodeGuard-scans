@@ -1,0 +1,29 @@
+# Requirements for the FREE hosting tier (Render free plan, 512 MB RAM).
+#
+# It is identical to `requirements.txt` except that **semgrep is omitted**:
+# the semgrep package pulls in a large binary and needs well over 512 MB of
+# RAM while it runs, which does not fit on a free instance.  The scan worker
+# reports the missing tool per scan instead of crashing, and
+# `GET /api/scans/scanners/` shows semgrep as unavailable with an install
+# hint.
+#
+# To run semgrep as well, switch back to `requirements.txt` and move the
+# service to an instance with at least 1 GB RAM.
+
+django==6.0.2
+djangorestframework==3.16.1
+djangorestframework-simplejwt==5.4.0
+django-cors-headers==4.9.0
+requests==2.32.5
+python-dotenv==1.2.2
+asgiref==3.11.1
+sqlparse==0.5.5
+tzdata==2025.3
+pydantic==2.12.5
+
+# ── Production ───────────────────────────────────────────────────────────────
+gunicorn
+whitenoise
+dj-database-url
+psycopg[binary]
+django-storages[s3]

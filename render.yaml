@@ -1,0 +1,96 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Render Blueprint — one-click deployment of CodeGuard on the free tier.
+#
+#   Render dashboard → New → Blueprint → point at this repository → Apply
+#
+# It creates two services:
+#   * codeguard-api  → the Django API **and** the background scan worker
+#                       (both run in the same free container, see backend/Procfile)
+#   * codeguard-web  → the React frontend, served as a static site
+#
+# You still have to fill in the values marked `sync: false` in the Render
+# dashboard afterwards (database URL, AI key, frontend URL).
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── Backend ─────────────────────────────────────────────────────────────────
+  - type: web
+    name: codeguard-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    region: oregon
+    buildCommand: >-
+      bash scripts/install_gitleaks.sh &&
+      pip install --upgrade pip &&
+      pip install -r requirements-deploy.txt &&
+      python manage.py collectstatic --noinput &&
+      python manage.py migrate --noinput
+    # Starts gunicorn AND the background scan worker in the same container
+    # (free plans have no separate Background Worker service).
+    startCommand: bash scripts/start_with_worker.sh
+    healthCheckPath: /admin/login/
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.13.4"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: DJANGO_DEBUG
+        value: "False"
+      # Lock this down to the real hostname once the service is created.
+      - key: DJANGO_ALLOWED_HOSTS
+        value: "*"
+      # Comma-separated origins of the frontend, e.g.
+      # https://codeguard-web.onrender.com
+      - key: DJANGO_CORS_ALLOWED_ORIGINS
+        sync: false
+      # Managed Postgres (Neon / Supabase / Aiven free tier).
+      - key: DATABASE_URL
+        sync: false
+      # Object storage for uploaded archives (Cloudflare R2 / Backblaze B2).
+      - key: AWS_STORAGE_BUCKET_NAME
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_S3_ENDPOINT_URL
+        sync: false
+      # AI provider credentials (server-side only, never in the frontend).
+      - key: CODEGUARD_AI_PROVIDER
+        value: auto
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: minimax/minimax-m3.1-flash:free
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Scan worker tuning.
+      - key: SCAN_WORKER_POLL_INTERVAL
+        value: "2"
+
+  # ── Frontend ────────────────────────────────────────────────────────────────
+  # A static site is `type: web` + `runtime: static`.
+  - type: web
+    name: codeguard-web
+    runtime: static
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./build
+    autoDeployTrigger: commit
+    routes:
+      # React Router (BrowserRouter) needs every unknown path to serve
+      # index.html so deep links like /dashboard work.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # Full public URL of the API, WITHOUT a trailing slash, e.g.
+      #   https://codeguard-api-abc123.onrender.com
+      # Set this in the Render dashboard right after the blueprint is applied
+      # (the hostname only exists once the API service has been created), then
+      # trigger "Manual Deploy → Clear build cache & deploy" on this site.
+      - key: VITE_API_BASE_URL
+        sync: false

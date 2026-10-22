@@ -1,0 +1,27 @@
+.DS_Store
+node_modules
+.idea
+.vscode/
+.idea/
+venv/
+__pycache__/
+*.pyc
+db.sqlite3
+media/
+Pipfile
+Pipfile.lock
+.env
+
+# collectstatic output
+staticfiles/
+
+# Huge local archives (backend.zip / package.zip are ~1.6 GB each — GitHub
+# rejects anything above 100 MB, so these must never be committed).
+*.zip
+
+/build
+
+# `package-lock.json` is intentionally NOT ignored: the hosting platform
+# needs it for reproducible `npm ci` / `npm install` builds.
+
+vite.config.*s.*

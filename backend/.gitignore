@@ -1,0 +1,17 @@
+# Backend-local secrets — never committed.
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local database
+db.sqlite3
+
+# Auto-started scan worker output
+logs/
+
+# Locally cached Semgrep rule set (downloaded on demand)
+.semgrep_cache/

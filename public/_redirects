@@ -1,0 +1,8 @@
+# SPA fallback for React Router (BrowserRouter).
+#
+# Render Static Sites, Netlify and Cloudflare Pages all read this file from
+# the published directory.  Vite copies everything in `public/` into the build
+# output, so the rule ends up next to index.html.
+#
+# Without it, refreshing /dashboard or /scan-history would return a 404.
+/*    /index.html   200

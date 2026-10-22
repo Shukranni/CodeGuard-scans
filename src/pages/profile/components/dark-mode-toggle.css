@@ -1,0 +1,134 @@
+/* Dark Mode Toggle Styles */
+
+.dark-mode-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+/* Toggle Switch */
+.toggle-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.toggle-switch:hover {
+  transform: scale(1.05);
+}
+
+.toggle-switch:active {
+  transform: scale(0.98);
+}
+
+/* Toggle Track */
+.toggle-track {
+  position: relative;
+  width: 64px;
+  height: 36px;
+  background-color: var(--color-muted);
+  border-radius: 18px;
+  transition: background-color 300ms cubic-bezier(0.4, 0, 0.2, 1);
+  border: 2px solid transparent;
+}
+
+.toggle-switch[aria-checked="true"] .toggle-track {
+  background-color: var(--color-primary);
+}
+
+/* Toggle Thumb */
+.toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 32px;
+  height: 32px;
+  background-color: white;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 300ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toggle-switch[aria-checked="true"] .toggle-thumb {
+  transform: translateX(28px);
+}
+
+/* Icon inside toggle */
+.toggle-icon {
+  width: 16px;
+  height: 16px;
+  opacity: 0;
+  transition: opacity 300ms ease;
+}
+
+.toggle-switch[aria-checked="true"] .toggle-icon {
+  opacity: 1;
+}
+
+/* Focus state */
+.toggle-switch:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+  border-radius: 20px;
+}
+
+/* Keyboard focus visible */
+.toggle-switch:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+/* Animation for theme transition */
+@keyframes theme-transition {
+  0% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+body.theme-transitioning {
+  animation: theme-transition 300ms ease-out;
+}
+
+/* Dark mode specific styles */
+.dark .toggle-track {
+  background-color: var(--color-muted);
+}
+
+.dark .toggle-switch[aria-checked="true"] .toggle-track {
+  background-color: var(--color-primary);
+}
+
+.dark .toggle-thumb {
+  background-color: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  .toggle-track {
+    width: 56px;
+    height: 32px;
+  }
+
+  .toggle-thumb {
+    width: 28px;
+    height: 28px;
+  }
+
+  .toggle-switch[aria-checked="true"] .toggle-thumb {
+    transform: translateX(24px);
+  }
+}
