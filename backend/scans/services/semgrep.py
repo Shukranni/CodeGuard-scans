@@ -111,8 +111,9 @@ def reset_semgrep_cache():
 
 def semgrep_available():
     # A configured GitHub Actions runner counts as availability even when
-    # this machine has no local semgrep install at all.
-    if github_actions.enabled():
+    # this machine has no local semgrep install at all — unless the rule
+    # config only exists on this machine.
+    if github_actions.enabled() and _remote_config() is not None:
         return True
     return _find_semgrep() is not None
 
@@ -398,7 +399,9 @@ class SemgrepScanner:
                          'runner does not know where to fetch the archive from.',
             }
 
-        args = _command_args(config, _remote_jobs(), 0)
+        # 5000 MiB is Semgrep's own default — the runner has 7 GB, so
+        # unlike the local 192 MiB cap nothing needs squeezing here.
+        args = _command_args(config, _remote_jobs(), 5000)
         if not _args_are_safe(args):
             return {'error': 'Remote Semgrep arguments contain unsupported characters.'}
 

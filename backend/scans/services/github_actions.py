@@ -175,7 +175,7 @@ def _find_run(scan_id):
     merely recent runs, so a hand-triggered run never hijacks the poll.
     """
     response = requests.get(
-        _repo_url('/actions/runs'),
+        _repo_url(f'/actions/workflows/{workflow_file()}/runs'),
         params={'event': 'workflow_dispatch', 'per_page': 10},
         headers=_headers(),
         timeout=DEFAULT_HTTP_TIMEOUT,

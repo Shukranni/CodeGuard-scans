@@ -1872,12 +1872,12 @@ class RemoteArgumentTests(SimpleTestCase):
     def test_remote_command_args_mirror_the_local_flags(self):
         from .services.semgrep import EXCLUDED_DIRS, _command_args
 
-        args = _command_args('p/default', 2, 0)
+        args = _command_args('p/default', 2, 5000)
 
         self.assertEqual(args[args.index('--config') + 1], 'p/default')
         self.assertEqual(args[args.index('--jobs') + 1], '2')
-        # The runner has 7 GB — no memory cap, unlike the 512 MB box.
-        self.assertEqual(args[args.index('--max-memory') + 1], '0')
+        # Semgrep's own default — the 7 GB runner needs no tight cap.
+        self.assertEqual(args[args.index('--max-memory') + 1], '5000')
         for directory in EXCLUDED_DIRS:
             self.assertIn(directory, args)
         self.assertIn('--disable-version-check', args)
@@ -2144,6 +2144,12 @@ class GitHubActionsProtocolTests(SimpleTestCase):
         )
         self.assertEqual(payload['run_url'], 'https://github.com/octo/repo/actions/runs/77')
         self.assertEqual(get.call_count, 4)
+        # The first call lists runs of *this* workflow only, so a second
+        # workflow in the repository could never hijack the poll.
+        self.assertIn(
+            '/repos/octo/repo/actions/workflows/semgrep-scan.yml/runs',
+            get.call_args_list[0][0][0],
+        )
 
     def test_a_failed_run_reports_its_url(self):
         from .services import github_actions
