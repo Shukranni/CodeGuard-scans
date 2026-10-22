@@ -164,9 +164,20 @@ class ScannerRunner:
                 try:
                     # Execute the scan
                     scan_result = scanner_instance.scan()
-                    results[scanner_name] = scan_result
                 except Exception as e:
-                    results[scanner_name] = {'error': str(e)}
+                    scan_result = {'error': str(e)}
+                # A tool that is not installed on this host is a deployment
+                # choice (semgrep is intentionally absent on 512 MB free
+                # hosts), not an execution failure: report it as "skipped" so
+                # it can neither fail nor downgrade the whole scan.
+                if isinstance(scan_result, dict) and scan_result.get('unavailable'):
+                    scan_result = {
+                        'skipped': True,
+                        'unavailable': True,
+                        'reason': scan_result.get('error')
+                                  or 'Scanner is not installed on this host.',
+                    }
+                results[scanner_name] = scan_result
             else:
                 results[scanner_name] = {'error': f'Scanner {scanner_name} not supported'}
             completed += 1

@@ -49,7 +49,7 @@ from .services.scan_worker import (
     scan_worker_snapshot,
     sweep_stale_scans,
 )
-from .services.scanner_runner import classify_scan_result
+from .services.scanner_runner import ScannerRunner, classify_scan_result
 from .services.findings import summarize_scan
 from .services import dependency as dependency_module
 from .services.dependency import DependencyScanner
@@ -871,6 +871,49 @@ class ClassifyScanResultTests(SimpleTestCase):
         self.assertEqual(classify_scan_result(None), 'error')
         # skipped + error → execution was skipped, not a failure of the tool
         self.assertEqual(classify_scan_result({'skipped': True, 'error': ''}), 'skipped')
+
+
+class ScannerUnavailableTests(SimpleTestCase):
+    """
+    A scanner whose executable is not installed on the host reports
+    ``unavailable: True``.  That is a deployment choice (semgrep is
+    intentionally absent on small free hosts), not an execution failure —
+    ``run_all`` must translate it to a *skipped* result so one missing tool
+    can neither fail nor downgrade the whole scan.
+    """
+
+    def test_unavailable_scanner_is_reported_as_skipped(self):
+        temp_dir = tempfile.mkdtemp(prefix='codeguard_avail_test_')
+        self.addCleanup(shutil.rmtree, temp_dir, ignore_errors=True)
+
+        class OkScanner:
+            def __init__(self, project_path):
+                pass
+
+            def scan(self):
+                return {'findings': []}
+
+        class MissingScanner:
+            def __init__(self, project_path):
+                pass
+
+            def scan(self):
+                return {
+                    'error': 'semgrep executable not found. Install it.',
+                    'unavailable': True,
+                }
+
+        original_map = ScannerRunner.SCANNER_MAP
+        ScannerRunner.SCANNER_MAP = {'gitleaks': OkScanner, 'semgrep': MissingScanner}
+        try:
+            results = ScannerRunner(temp_dir, ['gitleaks', 'semgrep']).run_all()
+        finally:
+            ScannerRunner.SCANNER_MAP = original_map
+
+        self.assertEqual(classify_scan_result(results['gitleaks']), 'ok')
+        self.assertEqual(classify_scan_result(results['semgrep']), 'skipped')
+        self.assertTrue(results['semgrep'].get('unavailable'))
+        self.assertIn('semgrep executable not found', results['semgrep']['reason'])
 
 
 class GitleaksResultPathTests(TestCase):

@@ -24,6 +24,24 @@
 
 set -uo pipefail
 
+# ── Scanner binaries installed at build time ─────────────────────────────────
+# install_gitleaks.sh drops gitleaks into backend/.tools/bin.  The build and
+# the runtime share the same filesystem, but that directory is not on PATH by
+# default — put it there and export CODEGUARD_GITLEAKS_BIN (the scanner checks
+# that override first) so BOTH the API (availability endpoint) and the scan
+# worker resolve the binary.  Exported vars are inherited by the child
+# processes started below.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+TOOLS_BIN="${BACKEND_DIR}/.tools/bin"
+if [ -d "${TOOLS_BIN}" ]; then
+  export PATH="${TOOLS_BIN}:${PATH}"
+  if [ -z "${CODEGUARD_GITLEAKS_BIN:-}" ] && [ -x "${TOOLS_BIN}/gitleaks" ]; then
+    export CODEGUARD_GITLEAKS_BIN="${TOOLS_BIN}/gitleaks"
+  fi
+  echo "[codeguard] tools directory on PATH: ${TOOLS_BIN}"
+fi
+
 POLL_INTERVAL="${SCAN_WORKER_POLL_INTERVAL:-2}"
 HTTP_TIMEOUT="${GUNICORN_TIMEOUT:-300}"
 

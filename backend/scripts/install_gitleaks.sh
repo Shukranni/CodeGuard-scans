@@ -4,7 +4,9 @@
 #
 # gitleaks is distributed as a static binary — there is no pip package.  This
 # script downloads the latest release from GitHub and drops the executable
-# into /usr/local/bin so it is on PATH for the scan worker.
+# into backend/.tools/bin (project-relative, always writable).  The start
+# script (start_with_worker.sh) puts that directory on PATH and exports
+# CODEGUARD_GITLEAKS_BIN, so the API and the scan worker always find it.
 #
 # Usage:  bash scripts/install_gitleaks.sh
 #
@@ -18,18 +20,15 @@ set -euo pipefail
 
 FALLBACK_VERSION="8.28.0"
 
-# Prefer a directory that is on PATH; fall back to a user-writable one.
-# (The build and the runtime share the same filesystem on native runtimes, so
-# whatever we install here is still there when the worker starts.)
-choose_install_dir() {
-  local candidate="${GITLEAKS_INSTALL_DIR:-/usr/local/bin}"
-  if mkdir -p "${candidate}" 2>/dev/null && [ -w "${candidate}" ]; then
-    printf '%s' "${candidate}"
-    return 0
-  fi
-  printf '%s' "${HOME}/.local/bin"
-}
-INSTALL_DIR="$(choose_install_dir)"
+# Install into a project-relative directory instead of guessing PATH entries.
+# The previous logic tried /usr/local/bin first (often not writable for the
+# build user) and fell back to $HOME/.local/bin (never on the runtime PATH) —
+# so the install "succeeded" but the worker still reported
+# "gitleaks executable not found".  backend/.tools/bin is always writable,
+# ships with the deployed code, and start_with_worker.sh wires it into PATH.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+INSTALL_DIR="${GITLEAKS_INSTALL_DIR:-${BACKEND_DIR}/.tools/bin}"
 mkdir -p "${INSTALL_DIR}"
 
 detect_latest_version() {

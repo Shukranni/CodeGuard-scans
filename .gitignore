@@ -15,6 +15,9 @@ Pipfile.lock
 # collectstatic output
 staticfiles/
 
+# Build-time scanner binaries (install_gitleaks.sh → backend/.tools/bin)
+.tools/
+
 # Huge local archives (backend.zip / package.zip are ~1.6 GB each — GitHub
 # rejects anything above 100 MB, so these must never be committed).
 *.zip

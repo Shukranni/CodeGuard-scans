@@ -31,7 +31,8 @@ class DependencyScanner:
 
     def scan(self):
         try:
-            if not _find_npm():
+            npm_exe = _find_npm()
+            if not npm_exe:
                 return {
                     'error': 'npm executable not found. Install Node.js and ensure npm is on PATH.',
                     'unavailable': True,
@@ -66,14 +67,23 @@ class DependencyScanner:
                     reason = 'No package.json or package-lock.json found. Skipping dependency audit.'
                 return {'skipped': True, 'reason': reason}
 
-            # On Windows, npm is a .cmd script so we need shell=True.
-            # Capture raw bytes and decode with errors='replace' to avoid
-            # charmap encoding crashes on Windows.
+            # On Windows, npm is a .cmd script, so the command must go through
+            # the shell (cmd.exe).  On POSIX, shell=True with a LIST would be
+            # wrong: sh -c receives only argv[0] ("npm" — no subcommand!) and
+            # the remaining items become $0/$1, which silently ran a bare `npm`
+            # whose help text is not JSON ("Failed to parse npm audit output").
+            # Run the absolute path directly there.
+            if os.name == 'nt':
+                run_args = '"{}" audit --json'.format(npm_exe)
+                use_shell = True
+            else:
+                run_args = [npm_exe, 'audit', '--json']
+                use_shell = False
             result = subprocess.run(
-                ['npm', 'audit', '--json'],
+                run_args,
                 cwd=scan_dir,
                 capture_output=True,
-                shell=True,
+                shell=use_shell,
                 timeout=DEPENDENCY_TIMEOUT
             )
             stdout_str = result.stdout.decode('utf-8', errors='replace')
