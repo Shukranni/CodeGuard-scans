@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import Header from 'components/navigation/Header';
+import AppShell from '../../components/layout/AppShell';
+import PageHeader from '../../components/layout/PageHeader';
 import FilterToolbar from '../../components/ui/FilterToolbar';
 import Select from '../../components/ui/Select';
 import Button from '../../components/ui/Button';
@@ -306,17 +307,15 @@ const ScanHistory = () => {
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-background">
-      <Header />
-      <main className="main-content">
-        <div className="max-w-7xl mx-auto px-4 py-8">
-          <div className="flex items-center justify-between mb-8">
-            <div>
-              <h1 className="text-3xl font-bold text-foreground mb-2">Scan History</h1>
-              <p className="text-muted-foreground">
-                Review and manage your security analysis sessions
-              </p>
-            </div>
+    <AppShell
+      headerTitle="Scan history"
+      breadcrumbs={[{ label: 'Dashboard', to: '/dashboard' }, { label: 'Scan history' }]}
+    >
+      <div className="mx-auto max-w-[1400px] space-y-6">
+        <PageHeader
+          title="Scan history"
+          description="Review and manage your security analysis sessions"
+          actions={
             <Button
               variant="default"
               onClick={handleStartNewScan}
@@ -325,108 +324,108 @@ const ScanHistory = () => {
             >
               New Scan
             </Button>
+          }
+        />
+
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center py-24">
+            <Icon name="Loader2" size={32} className="text-primary animate-spin" />
           </div>
+        )}
 
-          {/* Loading */}
-          {loading && (
-            <div className="flex items-center justify-center py-24">
-              <Icon name="Loader2" size={32} className="text-primary animate-spin" />
-            </div>
-          )}
+        {/* Error */}
+        {!loading && error && (
+          <div className="text-center py-16">
+            <Icon name="AlertCircle" size={40} className="text-error mx-auto mb-3" />
+            <p className="text-muted-foreground">{error}</p>
+            <Button variant="outline" className="mt-4" onClick={fetchScans}>
+              Retry
+            </Button>
+          </div>
+        )}
 
-          {/* Error */}
-          {!loading && error && (
-            <div className="text-center py-16">
-              <Icon name="AlertCircle" size={40} className="text-error mx-auto mb-3" />
-              <p className="text-muted-foreground">{error}</p>
-              <Button variant="outline" className="mt-4" onClick={fetchScans}>
-                Retry
-              </Button>
-            </div>
-          )}
+        {/* Empty workspace */}
+        {!loading && !error && scans.length === 0 && <EmptyState />}
 
-          {/* Empty workspace */}
-          {!loading && !error && scans.length === 0 && <EmptyState />}
+        {/* Data */}
+        {!loading && !error && scans.length > 0 && (
+          <>
+            <SummaryDashboard summaryData={summaryData} />
 
-          {/* Data */}
-          {!loading && !error && scans.length > 0 && (
-            <>
-              <SummaryDashboard summaryData={summaryData} />
+            <QuickAccessSection
+              recentScans={scans.slice(0, 3)}
+              frequentProjects={frequentProjects}
+              onViewScan={handleViewResults}
+              onStartNewScan={handleStartNewScan}
+            />
 
-              <QuickAccessSection
-                recentScans={scans.slice(0, 3)}
-                frequentProjects={frequentProjects}
-                onViewScan={handleViewResults}
-                onStartNewScan={handleStartNewScan}
-              />
-
-              <div className="bg-card border border-border rounded-lg p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-xl font-semibold text-foreground flex items-center gap-2">
-                    <Icon name="History" size={24} />
-                    All Scans ({filteredAndSortedScans.length})
-                  </h2>
-                  <div className="flex items-center gap-3">
-                    <Select
-                      options={dateRangeOptions}
-                      value={filters.dateRange || 'all'}
-                      onChange={(value) => setFilters({ ...filters, dateRange: value })}
-                      placeholder="Date Range"
-                    />
-                    <Select
-                      options={sortOptions}
-                      value={sortBy}
-                      onChange={setSortBy}
-                      placeholder="Sort By"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleSelectAll}
-                      iconName={selectedScans.length === filteredAndSortedScans.length ? 'CheckSquare' : 'Square'}
-                      iconPosition="left"
-                    >
-                      {selectedScans.length === filteredAndSortedScans.length ? 'Deselect All' : 'Select All'}
-                    </Button>
-                  </div>
-                </div>
-
-                <FilterToolbar
-                  onSearchChange={setSearchQuery}
-                  onFilterChange={setFilters}
-                  searchPlaceholder="Search by project name..."
-                  showExport={false}
-                />
-
-                <div className="space-y-4 mt-6">
-                  {filteredAndSortedScans.length > 0 ? (
-                    filteredAndSortedScans.map((scan) => (
-                      <ScanHistoryCard
-                        key={scan.id}
-                        scan={scan}
-                        onViewResults={handleViewResults}
-                        onRerun={handleRerun}
-                        onDownload={handleDownload}
-                        onDelete={handleDelete}
-                        onSelect={handleSelectScan}
-                        isSelected={selectedScans.includes(scan.id)}
-                      />
-                    ))
-                  ) : (
-                    <div className="text-center py-12">
-                      <Icon name="Search" size={48} className="text-muted-foreground mx-auto mb-4" />
-                      <p className="text-lg text-muted-foreground">No scans match your filters</p>
-                      <p className="text-sm text-muted-foreground mt-2">
-                        Try adjusting your search or filters
-                      </p>
-                    </div>
-                  )}
+            <div className="bg-card border border-border rounded-lg p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-semibold text-foreground flex items-center gap-2">
+                  <Icon name="History" size={24} />
+                  All Scans ({filteredAndSortedScans.length})
+                </h2>
+                <div className="flex items-center gap-3">
+                  <Select
+                    options={dateRangeOptions}
+                    value={filters.dateRange || 'all'}
+                    onChange={(value) => setFilters({ ...filters, dateRange: value })}
+                    placeholder="Date Range"
+                  />
+                  <Select
+                    options={sortOptions}
+                    value={sortBy}
+                    onChange={setSortBy}
+                    placeholder="Sort By"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSelectAll}
+                    iconName={selectedScans.length === filteredAndSortedScans.length ? 'CheckSquare' : 'Square'}
+                    iconPosition="left"
+                  >
+                    {selectedScans.length === filteredAndSortedScans.length ? 'Deselect All' : 'Select All'}
+                  </Button>
                 </div>
               </div>
-            </>
-          )}
-        </div>
-      </main>
+
+              <FilterToolbar
+                onSearchChange={setSearchQuery}
+                onFilterChange={setFilters}
+                searchPlaceholder="Search by project name..."
+                showExport={false}
+              />
+
+              <div className="space-y-4 mt-6">
+                {filteredAndSortedScans.length > 0 ? (
+                  filteredAndSortedScans.map((scan) => (
+                    <ScanHistoryCard
+                      key={scan.id}
+                      scan={scan}
+                      onViewResults={handleViewResults}
+                      onRerun={handleRerun}
+                      onDownload={handleDownload}
+                      onDelete={handleDelete}
+                      onSelect={handleSelectScan}
+                      isSelected={selectedScans.includes(scan.id)}
+                    />
+                  ))
+                ) : (
+                  <div className="text-center py-12">
+                    <Icon name="Search" size={48} className="text-muted-foreground mx-auto mb-4" />
+                    <p className="text-lg text-muted-foreground">No scans match your filters</p>
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Try adjusting your search or filters
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
 
       <BulkActionsBar
         selectedCount={selectedScans.length}
@@ -440,7 +439,7 @@ const ScanHistory = () => {
         onClose={() => setIsComparisonModalOpen(false)}
         scans={getComparisonScans()}
       />
-    </div>
+    </AppShell>
   );
 };
 

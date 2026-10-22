@@ -448,28 +448,6 @@
     @apply w-20 h-20 rounded-full bg-primary/10 text-primary flex items-center
            justify-center flex-shrink-0 text-2xl font-semibold;
   }
-
-  /* ── Legacy nav (kept so older markup still renders correctly) ──────── */
-  .primary-nav {
-    @apply fixed top-0 left-0 right-0 z-[100] bg-background border-b border-border;
-    height: 64px;
-  }
-
-  .primary-nav-container {
-    @apply h-full max-w-7xl mx-auto px-4 flex items-center justify-between;
-  }
-
-  .primary-nav-logo {
-    @apply flex items-center gap-3 no-underline;
-  }
-
-  .primary-nav-logo-text {
-    @apply text-lg font-semibold text-foreground;
-  }
-
-  .primary-nav-mobile-menu {
-    @apply fixed inset-0 z-[200] backdrop-blur-sm lg:hidden flex flex-col;
-  }
 }
 
 @layer utilities {

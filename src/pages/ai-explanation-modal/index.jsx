@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import Header from '../../components/navigation/Header';
+import AppShell from '../../components/layout/AppShell';
 import AIExplanationOverlay from '../../components/navigation/AIExplanationOverlay';
 import Icon from '../../components/AppIcon';
 import Button from '../../components/ui/Button';
@@ -33,41 +33,43 @@ const AIExplanationModal = () => {
 
   if (!hasTarget) {
     return (
-      <div className="min-h-screen bg-background">
-        <Header />
-        <main className="pt-24 pb-16 px-4 md:px-6 flex items-center justify-center">
-          <div className="max-w-md w-full text-center">
-            <div className="w-16 h-16 bg-muted/30 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Icon name="Search" size={30} color="var(--color-muted-foreground)" />
-            </div>
-            <h1 className="text-xl font-heading font-semibold text-foreground mb-2">
-              No finding selected
-            </h1>
-            <p className="text-sm text-muted-foreground mb-6">
-              Open an AI explanation from the scan results, the code explorer or the dashboard. The
-              link contains the scan and the finding it belongs to.
-            </p>
-            <div className="flex flex-wrap gap-3 justify-center">
-              <Button variant="outline" onClick={() => navigate('/scan-results')}>
-                Scan Results
-              </Button>
-              <Button onClick={() => navigate('/dashboard')}>Back to Dashboard</Button>
-            </div>
+      <AppShell
+        headerTitle="AI explanation"
+        breadcrumbs={[{ label: 'Dashboard', to: '/dashboard' }, { label: 'AI explanation' }]}
+      >
+        <div className="mx-auto flex max-w-md flex-col items-center justify-center py-16 text-center">
+          <div className="w-16 h-16 bg-muted/30 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Icon name="Search" size={30} color="var(--color-muted-foreground)" />
           </div>
-        </main>
-      </div>
+          <h1 className="text-xl font-heading font-semibold text-foreground mb-2">
+            No finding selected
+          </h1>
+          <p className="text-sm text-muted-foreground mb-6">
+            Open an AI explanation from the scan results, the code explorer or the dashboard. The
+            link contains the scan and the finding it belongs to.
+          </p>
+          <div className="flex flex-wrap gap-3 justify-center">
+            <Button variant="outline" onClick={() => navigate('/scan-results')}>
+              Scan Results
+            </Button>
+            <Button onClick={() => navigate('/dashboard')}>Back to Dashboard</Button>
+          </div>
+        </div>
+      </AppShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <Header />
+    <AppShell
+      headerTitle="AI explanation"
+      breadcrumbs={[{ label: 'Dashboard', to: '/dashboard' }, { label: 'AI explanation' }]}
+    >
       <AIExplanationOverlay
         scanId={scanId}
         findingId={findingId}
         onClose={() => navigate(-1)}
       />
-    </div>
+    </AppShell>
   );
 };
 
