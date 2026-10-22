@@ -1,0 +1,118 @@
+# Semgrep offload for the CodeGuard API (see DEPLOYMENT.md,
+# "Semgrep on GitHub Actions").
+#
+# The scan worker in the Render container queues this workflow with
+# workflow_dispatch, waits for the run and downloads the result artifact —
+# see backend/scans/services/github_actions.py.  It never runs on push.
+name: CodeGuard Semgrep scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      scan_id:
+        description: 'CodeGuard scan identifier (used to match the run)'
+        required: true
+        type: string
+      archive_url:
+        description: 'Signed URL of the project ZIP archive (expires quickly)'
+        required: true
+        type: string
+      args:
+        description: 'Semgrep arguments built by the CodeGuard worker'
+        required: true
+        type: string
+
+# Shows up as the run title in the Actions UI and in the API response,
+# which is how the worker recognises its own run.
+run-name: 'CodeGuard scan ${{ inputs.scan_id }}'
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-latest
+    # Always above the worker's wait budget
+    # (timeout_for(project) + CODEGUARD_SEMGREP_REMOTE_SLACK, at most 1200s).
+    timeout-minutes: 25
+    steps:
+      # The archive link is short-lived, so fetching it comes before any
+      # setup.  Values travel via env, never interpolated into the script.
+      - name: Fetch the project archive
+        env:
+          ARCHIVE_URL: ${{ inputs.archive_url }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --retry-delay 2 -o /tmp/project.zip "$ARCHIVE_URL"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Semgrep
+        run: pip install --quiet semgrep
+
+      - name: Cache the Semgrep rule set
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/semgrep
+          key: semgrep-rules-${{ runner.os }}
+
+      - name: Run Semgrep
+        env:
+          # Word-splitting on this variable is intended: the worker joins
+          # pre-validated, shell-safe arguments with spaces.
+          SEMGREP_ARGS: ${{ inputs.args }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/src
+          mkdir -p /tmp/src
+          unzip -q /tmp/project.zip -d /tmp/src
+
+          # Mirror the local runner: unwrap a single top-level directory
+          # (zip downloads usually nest everything under one folder) and
+          # drop heavy directories that are never user source code.
+          shopt -s nullglob dotglob
+          items=()
+          for entry in /tmp/src/*; do
+            base="$(basename "$entry")"
+            case "$base" in
+              .*) continue ;;
+              __MACOSX) continue ;;
+            esac
+            items+=("$entry")
+          done
+          src="/tmp/src"
+          if [ "${#items[@]}" -eq 1 ] && [ -d "${items[0]}" ]; then
+            src="${items[0]}"
+          fi
+
+          for dir in node_modules .git dist build __pycache__ .venv venv env \
+                     .tox coverage .next vendor bower_components target .cache; do
+            find "$src" -type d -name "$dir" -prune -exec rm -rf {} + 2>/dev/null || true
+          done
+
+          # Semgrep's exit code is recorded, not fatal: non-zero exits
+          # (findings with --strict, per-file errors) still come with
+          # usable JSON that the worker parses.
+          cd "$src"
+          set +e
+          semgrep scan $SEMGREP_ARGS . > /tmp/out.json 2> /tmp/err.txt
+          rc=$?
+          set -e
+          echo "$rc" > /tmp/rc.txt
+          exit 0
+
+      - name: Upload Semgrep output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-output
+          path: |
+            /tmp/out.json
+            /tmp/rc.txt
+            /tmp/err.txt
+          if-no-files-found: ignore
+          retention-days: 1
