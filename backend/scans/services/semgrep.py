@@ -166,6 +166,26 @@ def default_jobs():
     return max(1, min(2, cores))
 
 
+def max_memory_mib():
+    """
+    Value for Semgrep's ``--max-memory`` flag (MiB; 0 disables the limit).
+
+    With a limit set, Semgrep skips the offending file/rule instead of growing
+    until the kernel's OOM killer terminates the process — the difference
+    between "one file skipped" and "the whole scan failed" on a memory-capped
+    host such as a 512 MB free hosting instance.  The default is 0 (no limit)
+    so local development behaviour is unchanged; small hosts opt in with
+    ``CODEGUARD_SEMGREP_MAX_MEMORY``.
+    """
+    override = os.environ.get('CODEGUARD_SEMGREP_MAX_MEMORY')
+    if override is None:
+        return 0
+    try:
+        return max(0, int(override))
+    except ValueError:
+        return 0
+
+
 def rules_config():
     """
     Return the value for Semgrep's ``--config`` option.
@@ -216,6 +236,7 @@ def _build_command(semgrep_exe, config):
         '--config', config,
         '--jobs', str(default_jobs()),
         '--max-target-bytes', str(MAX_TARGET_BYTES),
+        '--max-memory', str(max_memory_mib()),
         # Do not phone home: the version check and the metrics upload each
         # cost a network round trip that can stall a scan.
         '--disable-version-check',

@@ -18,7 +18,7 @@ Everything in this repository is already configured for it.
 | **Scan worker** | `manage.py runscanworker` | runs **inside the API container** (`scripts/start_with_worker.sh`); in development the API also starts it on demand |
 | Database | SQLite locally → **Postgres** in the cloud | Neon / Supabase / Aiven free Postgres |
 | Uploaded project archives | local disk → **S3-compatible storage** | Cloudflare R2 / Backblaze B2 (free, strongly recommended) |
-| Scanner binaries | `gitleaks`, `npm audit`, `semgrep` | `gitleaks` installed by the build script; `semgrep` needs more RAM than a free instance has |
+| Scanner binaries | `gitleaks`, `npm audit`, `semgrep` | `gitleaks` installed by the build script; `semgrep` installed best-effort with 512 MB guardrails (skipped cleanly if it does not fit) |
 
 > **Why Postgres and object storage?**  Free hosts have an *ephemeral* disk:
 > SQLite and `media/` are wiped on every deploy/restart. A hosted instance must
@@ -181,13 +181,17 @@ point previously uploaded archives are gone (new uploads keep working).
 | --- | --- |
 | Sleeps after 15 min without traffic | First request after idle takes **~1 minute** (cold start). Polling from the dashboard keeps it awake. |
 | 750 instance hours/month | Roughly 31 days × 24 h of *running* time; spun-down hours are free. Exceeding it pauses the service until next month. |
-| 512 MB RAM / 0.1 vCPU | `semgrep` is **not installed** on the free tier (`requirements-deploy.txt`). Scans run `gitleaks` + `npm audit`; the UI reports semgrep as unavailable with its install hint. |
+| 512 MB RAM / 0.1 vCPU | Semgrep is installed **best-effort** at build time (a failed install never breaks the deploy) and runs with hard guardrails: `CODEGUARD_SEMGREP_JOBS=1` and `CODEGUARD_SEMGREP_MAX_MEMORY=192` (MiB). On a very large project it may skip files or report an error while `gitleaks` + `npm audit` still complete. |
 | Ephemeral disk | Requires external Postgres (§2) and ideally object storage (§4). |
 | One instance only | No scaling; long scans share CPU with HTTP requests. |
 | `migration` runs in the build command | Fine for a single instance; move to `preDeployCommand` if you ever run more than one. |
 
-To re-enable semgrep on a paid plan: switch the build to
-`pip install -r requirements.txt` (full requirements) and use at least 1 GB RAM.
+Semgrep is installed automatically by the `render.yaml` build command as a
+best-effort step (`pip install --no-cache-dir semgrep || echo …`): if it fits
+on the instance it runs with small-host guardrails; if it does not, the build
+still succeeds and scans report it as *skipped*. For heavy, always-on
+semgrep use at least 1 GB RAM (`pip install -r requirements.txt` in the
+build, or the free Hugging Face Spaces option in §7).
 
 ---
 
@@ -204,7 +208,7 @@ To re-enable semgrep on a paid plan: switch the build to
 | Scans stay `queued` and never finish | Worker not running, or the API and worker are in **different containers** (they must share one). |
 | `gitleaks executable not found` | `bash scripts/install_gitleaks.sh` failed during build (GitHub rate limit) — rebuild; it falls back to a pinned release. |
 | Scan finishes with *“Some scanners could not complete: semgrep”* | Semgrep ran out of time. The rule set is now cached locally (`backend/.semgrep_cache/`, refreshed weekly) so the download no longer eats the timeout, and the timeout scales with the project size. Tune with `CODEGUARD_SEMGREP_TIMEOUT`, `CODEGUARD_SEMGREP_SECONDS_PER_FILE` and `CODEGUARD_SEMGREP_MAX_TIMEOUT`; on a small machine use a lighter rule set (`CODEGUARD_SEMGREP_CONFIG=p/security-audit`). |
-| Semgrep reports *“terminated unexpectedly (exit code 3221225786)”* | The process was killed, almost always because the machine ran out of memory. Give the container more RAM or set `CODEGUARD_SEMGREP_JOBS=1`. |
+| Semgrep reports *“terminated unexpectedly (exit code 3221225786)”* | The process was killed, almost always because the machine ran out of memory. Give the container more RAM, set `CODEGUARD_SEMGREP_JOBS=1`, and cap the scanner with `CODEGUARD_SEMGREP_MAX_MEMORY=192`. |
 | The first scan after a deploy is slow | The worker downloads the Semgrep rule set once on start-up (in the background). Every later scan uses the cached copy. |
 | Login/register returns 500 | Usually `DATABASE_URL` invalid, or `DJANGO_SECRET_KEY` rotated between deployments (invalidates JWTs — sign in again). |
 | Frontend calls `http://127.0.0.1:8000` | `VITE_API_BASE_URL` is empty on the static site — set it and **rebuild** (Vite inlines it at build time). |

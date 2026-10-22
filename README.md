@@ -264,6 +264,7 @@ The worker:
 | `CODEGUARD_SEMGREP_SECONDS_PER_FILE` | `1.5` | Extra seconds the Semgrep timeout allows per analysed file. |
 | `CODEGUARD_SEMGREP_MAX_TIMEOUT` | `900` | Upper bound for the scaled Semgrep timeout. |
 | `CODEGUARD_SEMGREP_JOBS` | *(auto)* | Semgrep worker processes. Auto-detected: one when memory is tight, two otherwise. |
+| `CODEGUARD_SEMGREP_MAX_MEMORY` | `0` (no cap) | Memory cap in MiB passed to Semgrep's `--max-memory`. Small hosts (512 MB) set `192` so an oversized file is skipped instead of triggering the OOM killer. |
 | `CODEGUARD_SEMGREP_RULES_DIR` | `backend/.semgrep_cache` | Where the downloaded Semgrep rule set is cached. |
 | `CODEGUARD_SEMGREP_RULES_TTL` | `604800` | Seconds before the cached rule set is refreshed (7 days). |
 | `CODEGUARD_SEMGREP_RULES_TIMEOUT` | `180` | Seconds allowed for downloading the rule set. |

@@ -1,14 +1,17 @@
 # Requirements for the FREE hosting tier (Render free plan, 512 MB RAM).
 #
-# It is identical to `requirements.txt` except that **semgrep is omitted**:
-# the semgrep package pulls in a large binary and needs well over 512 MB of
-# RAM while it runs, which does not fit on a free instance.  The scan worker
-# reports the missing tool per scan instead of crashing, and
-# `GET /api/scans/scanners/` shows semgrep as unavailable with an install
-# hint.
+# It is identical to `requirements.txt` except that **semgrep is omitted from
+# this file on purpose**: it adds hundreds of MB of binaries, and a pip
+# failure here would fail the entire build.  `render.yaml` installs it as a
+# separate best-effort step right after this file:
 #
-# To run semgrep as well, switch back to `requirements.txt` and move the
-# service to an instance with at least 1 GB RAM.
+#     pip install --no-cache-dir semgrep || echo "…continuing without it"
+#
+# so a host that runs out of disk or network simply skips the scanner instead
+# of failing to deploy.  At scan time the worker runs it with small-host
+# guardrails (CODEGUARD_SEMGREP_JOBS=1, CODEGUARD_SEMGREP_MAX_MEMORY=192 in
+# render.yaml); if it still cannot run, the scan reports semgrep as *skipped*
+# while gitleaks and npm audit complete normally.
 
 django==6.0.2
 djangorestframework==3.16.1

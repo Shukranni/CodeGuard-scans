@@ -1599,6 +1599,20 @@ class SemgrepScannerTests(SimpleTestCase):
         cmd = run.call_args[0][0]
         self.assertEqual(cmd[cmd.index('--jobs') + 1], '3')
 
+    def test_a_memory_cap_can_be_configured(self):
+        # Memory-capped hosts (512 MB free instances) pass a --max-memory cap
+        # so an oversized file is skipped instead of tripping the OOM killer.
+        with mock.patch.dict(os.environ, {'CODEGUARD_SEMGREP_MAX_MEMORY': '192'}), \
+                self._patch_exe(), mock.patch.object(
+                    self.module, 'rules_config', return_value='p/default',
+                ), mock.patch.object(
+                    self.module.subprocess, 'run', return_value=self._completed(),
+                ) as run:
+            self.module.SemgrepScanner(self.project).scan()
+
+        cmd = run.call_args[0][0]
+        self.assertEqual(cmd[cmd.index('--max-memory') + 1], '192')
+
     def test_a_timeout_is_reported_as_such(self):
         with self._patch_exe(), mock.patch.object(
             self.module, 'rules_config', return_value='p/default',

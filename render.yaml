@@ -24,6 +24,8 @@ services:
       bash scripts/install_gitleaks.sh &&
       pip install --upgrade pip &&
       pip install -r requirements-deploy.txt &&
+      (pip install --no-cache-dir semgrep || echo "semgrep install failed -
+      continuing without it; scans will skip the scanner") &&
       python manage.py collectstatic --noinput &&
       python manage.py migrate --noinput
     # Starts gunicorn AND the background scan worker in the same container
@@ -71,6 +73,14 @@ services:
       # Scan worker tuning.
       - key: SCAN_WORKER_POLL_INTERVAL
         value: "2"
+      # Semgrep guardrails for the 512 MB free instance: the install step in
+      # buildCommand is best-effort, and at scan time one job plus a hard
+      # per-rule memory cap (MiB) makes an oversized project degrade to a
+      # skipped file instead of tripping the kernel OOM killer.
+      - key: CODEGUARD_SEMGREP_JOBS
+        value: "1"
+      - key: CODEGUARD_SEMGREP_MAX_MEMORY
+        value: "192"
 
   # ── Frontend ────────────────────────────────────────────────────────────────
   # A static site is `type: web` + `runtime: static`.
