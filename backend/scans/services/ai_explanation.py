@@ -53,6 +53,19 @@ Respond with a single JSON object and nothing else. Use exactly these keys:
 }
 Use empty strings or empty lists for anything you cannot support with the given data."""
 
+STREAMING_SYSTEM_PROMPT = """You are a senior application security engineer explaining a single \
+static-analysis finding to a developer who opened CodeGuard.
+
+Use only the finding and code excerpt provided. Never invent source code, file names, line \
+numbers, or advisories. Do not claim an illustrative example was tested, applied, or fixed \
+the project. Explain realistic impact and exploitability conditions without exaggeration. \
+If source context is unavailable, say so. Match the affected language and framework.
+
+Write a concise Markdown explanation with headings for Vulnerability overview, Why it matters, \
+Relevant code context, Potential impact, Recommended remediation, Secure code example (only \
+when supported), and OWASP classification (only when supported). Use fenced code blocks for \
+examples. Omit sections that cannot be supported by the supplied information."""
+
 _JSON_KEYS = (
     'summary', 'what_it_means', 'why_it_matters', 'where_it_occurs',
     'how_to_fix', 'safer_example', 'additional_recommendations', 'references',
@@ -74,7 +87,7 @@ def _location_line(finding):
     return file_path
 
 
-def build_prompt(finding, source_context=None):
+def build_prompt(finding, source_context=None, streaming=False):
     """Build the ``(system, user)`` prompt pair for one finding."""
     details = [
         f'Scanner: {finding.get("scanner") or "unknown"}',
@@ -122,10 +135,17 @@ def build_prompt(finding, source_context=None):
 
     prompt += [
         '',
-        'Write the explanation now, as the JSON object described in the system prompt.',
+        (
+            'Write the explanation now as Markdown, following the requested sections.'
+            if streaming else
+            'Write the explanation now, as the JSON object described in the system prompt.'
+        ),
     ]
 
-    return SYSTEM_PROMPT, '\n'.join(prompt)
+    return (
+        STREAMING_SYSTEM_PROMPT if streaming else SYSTEM_PROMPT,
+        '\n'.join(prompt),
+    )
 
 
 # ── Response parsing ──────────────────────────────────────────────────────────
@@ -366,3 +386,27 @@ def generate_explanation(finding, source_context=None):
     explanation['generated_at'] = timezone.now().isoformat()
 
     return explanation
+
+
+def stream_explanation(finding, source_context=None):
+    """Yield provider text deltas, then a normalized completed explanation."""
+    provider = get_ai_provider()
+    system_prompt, user_prompt = build_prompt(finding, source_context, streaming=True)
+    chunks = []
+
+    for chunk in provider.stream_complete(system_prompt, user_prompt):
+        chunks.append(chunk)
+        yield {'type': 'content', 'text': chunk}
+
+    raw_markdown = ''.join(chunks)
+    if not raw_markdown.strip():
+        raise AIInvalidResponseError('The AI provider returned an empty response.')
+
+    explanation = {
+        'format': 'text',
+        'raw_markdown': raw_markdown,
+    }
+    explanation['model'] = provider.model
+    explanation['provider'] = provider.name
+    explanation['generated_at'] = timezone.now().isoformat()
+    yield {'type': 'complete', 'explanation': explanation}

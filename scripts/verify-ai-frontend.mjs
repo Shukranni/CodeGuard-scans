@@ -168,6 +168,70 @@ console.log('\nAI explanation service');
   check('an unknown finding has no cached explanation',
     service.getCachedExplanation('1', 'semgrep_0') === null);
 
+  const previousFetch = globalThis.fetch;
+  const previousWindow = globalThis.window;
+  const storage = new Map([['access_token', 'test-access']]);
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => storage.get(key) || null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: (key) => storage.delete(key),
+    },
+    dispatchEvent: () => {},
+  };
+  const markdown = '## Vulnerability overview\n\nEscape user input.';
+  const finalPayload = {
+    finding: { id: 'semgrep_0' },
+    source_context: null,
+    explanation: { format: 'text', raw_markdown: markdown, provider: 'openai' },
+  };
+  const encoder = new TextEncoder();
+  const streamParts = [
+    `event: content\ndata: ${JSON.stringify({ text: '## Vulnerability overview\n\n' })}\n\n`,
+    `event: content\ndata: ${JSON.stringify({ text: 'Escape user input.' })}\n\n`,
+    `event: complete\ndata: ${JSON.stringify(finalPayload)}\n\n`,
+  ];
+  globalThis.fetch = async (url, options) => {
+    check('stream requests preserve authenticated finding context',
+      url.includes('/findings/semgrep_0/explain/?stream=1') &&
+      options.headers.Authorization === 'Bearer test-access' &&
+      !options.headers.Accept);
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          streamParts.forEach((part) => controller.enqueue(encoder.encode(part)));
+          controller.close();
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    );
+  };
+  try {
+    const received = [];
+    const streamed = await service.streamExplanation('1', 'semgrep_0', {
+      onChunk: (chunk) => received.push(chunk),
+    });
+    check('only actual content events are appended progressively',
+      received.join('') === markdown);
+    check('completion payload is returned without losing the streamed answer',
+      streamed.explanation.raw_markdown === markdown);
+    check('completed stream is cached for the same finding',
+      service.getCachedExplanation('1', 'semgrep_0') === streamed);
+
+    globalThis.fetch = async () =>
+      new Response(
+        'event: content\ndata: {"text":"partial"}\n\n',
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      );
+    const interrupted = await service.streamExplanation('1', 'semgrep_1').catch((error) => error);
+    check('an interrupted stream is an actionable failure',
+      interrupted.code === 'stream_interrupted');
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
+
   const originalWarn = console.warn;
   console.warn = () => {};
   try {

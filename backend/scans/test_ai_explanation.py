@@ -152,6 +152,19 @@ def openai_response(content):
     return fake_response(payload={'choices': [{'message': {'content': content}}]})
 
 
+def openai_stream_response(text):
+    response = fake_response()
+    response.iter_lines.return_value = [
+        b'data: {"choices":[{"delta":{"content":' + json.dumps(text).encode('utf-8') + b'},"finish_reason":null}]}',
+        b'',
+        b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        b'',
+        b'data: [DONE]',
+    ]
+    response.close = mock.Mock()
+    return response
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared base
 # ─────────────────────────────────────────────────────────────────────────────
@@ -300,6 +313,50 @@ class FindingDetailEndpointTests(ExplanationTestBase):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class FindingExplanationEndpointTests(ExplanationTestBase):
+    @override_settings(AI_PROVIDER='openai', OPENAI_API_KEY='sk-test-key')
+    def test_streaming_endpoint_forwards_real_provider_deltas_and_completion(self):
+        markdown = '## Vulnerability overview\n\nEscape user input.'
+        provider_response = openai_stream_response(markdown)
+        with mock.patch(
+            'scans.services.ai_provider.requests.post',
+            return_value=provider_response,
+        ) as post:
+            response = self.client.post(
+                f'{self.explain_url("semgrep_0")}?stream=1',
+                {'finding_id': 'semgrep_0'},
+                format='json',
+            )
+            events = b''.join(response.streaming_content).decode('utf-8')
+
+        self.assertEqual(response.status_code, http_status.HTTP_200_OK)
+        self.assertTrue(response['Content-Type'].startswith('text/event-stream'))
+        self.assertEqual(response['Cache-Control'], 'no-cache, no-transform')
+        self.assertEqual(response['X-Accel-Buffering'], 'no')
+        self.assertIn('event: content', events)
+        self.assertIn(json.dumps({'text': markdown}, separators=(',', ':')), events)
+        self.assertIn('event: complete', events)
+        self.assertIn('"format":"text"', events)
+        self.assertTrue(post.call_args.kwargs['stream'])
+        self.assertTrue(provider_response.close.called)
+
+    @override_settings(AI_PROVIDER='openai', OPENAI_API_KEY='sk-test-key')
+    def test_streaming_provider_errors_are_sent_as_actionable_error_events(self):
+        error_response = fake_response(status_code=429, headers={'Retry-After': '12'})
+        error_response.close = mock.Mock()
+        with mock.patch(
+            'scans.services.ai_provider.requests.post',
+            return_value=error_response,
+        ):
+            response = self.client.post(
+                f'{self.explain_url("semgrep_0")}?stream=1',
+                {'finding_id': 'semgrep_0'},
+                format='json',
+            )
+            events = b''.join(response.streaming_content).decode('utf-8')
+
+        self.assertIn('event: error', events)
+        self.assertIn('"code":"ai_rate_limited"', events)
+        self.assertIn('"retry_after":12', events)
     @override_settings(AI_PROVIDER='openai', OPENAI_API_KEY='sk-test-key')
     def test_successful_explanation_returns_the_canonical_payload(self):
         with mock.patch('scans.services.ai_provider.requests.post',
@@ -562,6 +619,30 @@ class ProviderAdapterTests(ScanTestEnvironment, AuthMixin, APITestCase):
         self.assertEqual(post.call_args.kwargs['json']['system'], 'system')
         self.assertEqual(post.call_args.kwargs['json']['messages'][0]['content'], 'user')
 
+    def test_anthropic_adapter_yields_text_from_its_event_stream(self):
+        from scans.services.ai_provider import AnthropicMessagesProvider
+
+        response = fake_response()
+        response.iter_lines.return_value = [
+            b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"part one"}}',
+            b'',
+            b'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":" part two"}}',
+            b'',
+            b'data: {"type":"message_stop"}',
+        ]
+        response.close = mock.Mock()
+        provider = AnthropicMessagesProvider(api_key='sk-ant-test')
+        with mock.patch(
+            'scans.services.ai_provider.requests.post',
+            return_value=response,
+        ) as post:
+            text = ''.join(provider.stream_complete('system', 'user'))
+
+        self.assertEqual(text, 'part one part two')
+        self.assertTrue(post.call_args.kwargs['json']['stream'])
+        self.assertTrue(post.call_args.kwargs['stream'])
+        self.assertTrue(response.close.called)
+
     @override_settings(AI_PROVIDER='auto', OPENAI_API_KEY='', ANTHROPIC_API_KEY='',
                        OPENROUTER_API_KEY='')
     def test_auto_provider_without_credentials_raises_configuration_error(self):
@@ -795,4 +876,3 @@ class ProviderErrorMappingTests(ScanTestEnvironment, AuthMixin, APITestCase):
 
         provider = OpenAIChatProvider(api_key='sk-test-key')
         self.assertEqual(provider.max_tokens, OpenAIChatProvider.default_max_tokens)
-

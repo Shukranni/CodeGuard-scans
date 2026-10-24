@@ -1,6 +1,6 @@
 from urllib.parse import unquote
 
-from django.http import FileResponse
+from django.http import FileResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -20,9 +20,10 @@ from .services.worker_launcher import ensure_worker_running
 from .services.dashboard_overview import DashboardOverviewService
 from .services.findings import find_finding, public_finding
 from .services.source_context import extract_source_context
-from .services.ai_explanation import generate_explanation
+from .services.ai_explanation import generate_explanation, stream_explanation
 from .services.ai_provider import AIProviderError, AIProviderRateLimitError
 
+import json
 import logging
 import os
 import uuid
@@ -380,6 +381,71 @@ class FindingExplanationView(APIView):
             finding.get('line'), finding.get('end_line'),
         )
 
+        if request.query_params.get('stream') == '1':
+            def event(data, name):
+                return (
+                    f'event: {name}\n'
+                    f'data: {json.dumps(data, ensure_ascii=True, separators=(",", ":"))}\n\n'
+                )
+
+            def stream_events():
+                try:
+                    for item in stream_explanation(finding, source_context):
+                        if item['type'] == 'complete':
+                            yield event(
+                                {
+                                    'finding': public_finding(finding),
+                                    'source_context': source_context,
+                                    'explanation': item['explanation'],
+                                },
+                                'complete',
+                            )
+                        else:
+                            yield event({'text': item['text']}, 'content')
+                except AIProviderRateLimitError as exc:
+                    payload = {
+                        'error': exc.message,
+                        'code': exc.code,
+                        'retryable': True,
+                    }
+                    if exc.retry_after:
+                        payload['retry_after'] = exc.retry_after
+                    yield event(payload, 'error')
+                except AIProviderError as exc:
+                    logger.warning(
+                        'Streaming AI explanation failed for scan %s finding %s: %s',
+                        scan.pk, finding.get('id'), exc.code,
+                    )
+                    yield event(
+                        {
+                            'error': exc.message,
+                            'code': exc.code,
+                            'retryable': exc.retryable,
+                        },
+                        'error',
+                    )
+                except Exception:
+                    logger.exception(
+                        'Unexpected streaming AI explanation failure for scan %s finding %s',
+                        scan.pk, finding.get('id'),
+                    )
+                    yield event(
+                        {
+                            'error': 'The explanation could not be generated. Please try again.',
+                            'code': 'ai_unknown_error',
+                            'retryable': True,
+                        },
+                        'error',
+                    )
+
+            response = StreamingHttpResponse(
+                stream_events(),
+                content_type='text/event-stream; charset=utf-8',
+            )
+            response['Cache-Control'] = 'no-cache, no-transform'
+            response['X-Accel-Buffering'] = 'no'
+            return response
+
         try:
             explanation = generate_explanation(finding, source_context)
         except AIProviderRateLimitError as exc:
@@ -413,4 +479,3 @@ class FindingExplanationView(APIView):
             },
             status=status.HTTP_200_OK,
         )
-

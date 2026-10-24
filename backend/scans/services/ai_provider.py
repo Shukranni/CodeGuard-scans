@@ -27,6 +27,7 @@ insufficient credits, an unavailable model, rate limits, timeouts, provider
 outages and malformed responses — is mapped to a dedicated exception carrying a
 stable error code and an HTTP status.
 """
+import json
 import logging
 
 import requests
@@ -170,6 +171,77 @@ class BaseProvider:
             return ''
         return str(choices[0].get('finish_reason') or '').strip()
 
+    def _raise_for_status(self, response):
+        status = getattr(response, 'status_code', 0)
+
+        if status in (401, 403):
+            logger.warning('AI provider rejected the configured credentials (status %s).', status)
+            raise AIProviderAuthError(
+                'The AI provider rejected the configured credentials. '
+                'Check the API key configured on the backend.'
+            )
+        if status == 402:
+            raise AIInsufficientCreditsError(
+                'The AI provider account has no credits left. '
+                'An administrator has to top up the provider account.'
+            )
+        if status == 404:
+            raise AIModelUnavailableError(
+                'The configured AI model is not available. '
+                'Check the model name configured on the backend.'
+            )
+        if status == 429:
+            retry_after = None
+            try:
+                retry_after = int(response.headers.get('Retry-After', 0)) or None
+            except (TypeError, ValueError):
+                retry_after = None
+            raise AIProviderRateLimitError(
+                'The AI provider is rate limiting requests. Please wait a moment and try again.',
+                retry_after=retry_after,
+            )
+        if status >= 500:
+            raise AIProviderUnavailableError(
+                'The AI provider is currently unavailable. Please try again shortly.'
+            )
+        if status >= 400:
+            raise AIProviderError(
+                'The AI provider rejected the request. '
+                'Please check the provider configuration.',
+                retryable=False,
+            )
+
+    def _open_stream(self, system_prompt, user_prompt):
+        if not self.api_key:
+            raise AIConfigurationError(
+                'The AI provider API key is empty. Configure it on the backend.'
+            )
+        payload = self._payload(system_prompt, user_prompt)
+        payload['stream'] = True
+        try:
+            response = requests.post(
+                self._endpoint(),
+                headers=self._headers(),
+                json=payload,
+                timeout=self.timeout,
+                stream=True,
+            )
+        except requests.exceptions.Timeout:
+            raise AIProviderTimeoutError(
+                'The AI provider did not respond in time. Please try again.'
+            )
+        except requests.exceptions.RequestException:
+            raise AIProviderUnavailableError(
+                'The AI provider could not be reached. Please try again shortly.'
+            )
+
+        try:
+            self._raise_for_status(response)
+        except AIProviderError:
+            response.close()
+            raise
+        return response
+
     # -- shared --------------------------------------------------------------
     def complete(self, system_prompt, user_prompt):
         """Run a completion and return the model's text output."""
@@ -195,52 +267,7 @@ class BaseProvider:
                 'The AI provider could not be reached. Please try again shortly.'
             )
 
-        status = getattr(response, 'status_code', 0)
-
-        if status in (401, 403):
-            # Never echo the provider's body — it may quote the key back.
-            logger.warning('AI provider rejected the configured credentials (status %s).', status)
-            raise AIProviderAuthError(
-                'The AI provider rejected the configured credentials. '
-                'Check the API key configured on the backend.'
-            )
-
-        if status == 402:
-            raise AIInsufficientCreditsError(
-                'The AI provider account has no credits left. '
-                'An administrator has to top up the provider account.'
-            )
-
-        if status == 404:
-            raise AIModelUnavailableError(
-                'The configured AI model is not available. '
-                'Check the model name configured on the backend.'
-            )
-
-        if status == 429:
-            retry_after = None
-            try:
-                retry_after = int(response.headers.get('Retry-After', 0)) or None
-            except (TypeError, ValueError):
-                retry_after = None
-            raise AIProviderRateLimitError(
-                'The AI provider is rate limiting requests. Please wait a moment and try again.',
-                retry_after=retry_after,
-            )
-
-        if status >= 500:
-            raise AIProviderUnavailableError(
-                'The AI provider is currently unavailable. Please try again shortly.'
-            )
-
-        if status >= 400:
-            # A request the provider rejected will not be accepted by sending
-            # it again — the configuration or the request has to change first.
-            raise AIProviderError(
-                'The AI provider rejected the request. '
-                'Please check the provider configuration.',
-                retryable=False,
-            )
+        self._raise_for_status(response)
 
         try:
             data = response.json()
@@ -298,6 +325,85 @@ class OpenAIChatProvider(BaseProvider):
             return ''
         message = choices[0].get('message') or {}
         return message.get('content') or ''
+
+    @staticmethod
+    def _delta_text(delta):
+        content = (delta or {}).get('content') or ''
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return ''.join(
+                part.get('text', '')
+                for part in content
+                if isinstance(part, dict) and isinstance(part.get('text'), str)
+            )
+        return ''
+
+    def stream_complete(self, system_prompt, user_prompt):
+        """Yield actual content deltas from an OpenAI-compatible SSE response."""
+        response = self._open_stream(system_prompt, user_prompt)
+        emitted = 0
+        finished = False
+        finish_reason = ''
+        try:
+            for raw_line in response.iter_lines(decode_unicode=True):
+                if not raw_line:
+                    continue
+                line = raw_line.decode('utf-8') if isinstance(raw_line, bytes) else raw_line
+                line = line.strip()
+                if not line.startswith('data:'):
+                    continue
+                data = line[5:].strip()
+                if data == '[DONE]':
+                    finished = True
+                    break
+                try:
+                    event = json.loads(data)
+                except ValueError:
+                    raise AIInvalidResponseError(
+                        'The AI provider returned a response that could not be parsed.'
+                    )
+                if not isinstance(event, dict):
+                    raise AIInvalidResponseError(
+                        'The AI provider returned a response that could not be parsed.'
+                    )
+                choices = event.get('choices') or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    raise AIInvalidResponseError(
+                        'The AI provider returned a response that could not be parsed.'
+                    )
+                finish_reason = str(choice.get('finish_reason') or finish_reason)
+                text = self._delta_text(choice.get('delta'))
+                if text:
+                    emitted += len(text.encode('utf-8'))
+                    if emitted > MAX_RESPONSE_BYTES:
+                        raise AIInvalidResponseError(
+                            'The AI provider response exceeded the allowed size.'
+                        )
+                    yield text
+            if not finished:
+                raise AIInvalidResponseError(
+                    'The AI provider stream ended before it was complete.'
+                )
+            if finish_reason == 'length':
+                raise AIIncompleteResponseError(
+                    'The AI provider ran out of tokens before it could finish the answer.'
+                )
+            if not emitted:
+                raise AIInvalidResponseError('The AI provider returned an empty response.')
+        except requests.exceptions.Timeout:
+            raise AIProviderTimeoutError(
+                'The AI provider did not respond in time. Please try again.'
+            )
+        except requests.exceptions.RequestException:
+            raise AIProviderUnavailableError(
+                'The AI provider connection was interrupted. Please try again.'
+            )
+        finally:
+            response.close()
 
 
 class OpenRouterProvider(OpenAIChatProvider):
@@ -387,6 +493,68 @@ class AnthropicMessagesProvider(BaseProvider):
             if isinstance(block, dict) and block.get('type') in (None, 'text')
         ]
         return '\n'.join(part for part in parts if part)
+
+    def stream_complete(self, system_prompt, user_prompt):
+        """Yield text deltas from Anthropic's Messages API event stream."""
+        response = self._open_stream(system_prompt, user_prompt)
+        emitted = 0
+        finished = False
+        try:
+            for raw_line in response.iter_lines(decode_unicode=True):
+                if not raw_line:
+                    continue
+                line = raw_line.decode('utf-8') if isinstance(raw_line, bytes) else raw_line
+                if not line.startswith('data:'):
+                    continue
+                try:
+                    event = json.loads(line[5:].strip())
+                except ValueError:
+                    raise AIInvalidResponseError(
+                        'The AI provider returned a response that could not be parsed.'
+                    )
+                if not isinstance(event, dict):
+                    raise AIInvalidResponseError(
+                        'The AI provider returned a response that could not be parsed.'
+                    )
+                event_type = event.get('type')
+                if event_type == 'content_block_delta':
+                    delta = event.get('delta') or {}
+                    text = delta.get('text') or ''
+                    if isinstance(text, str) and text:
+                        emitted += len(text.encode('utf-8'))
+                        if emitted > MAX_RESPONSE_BYTES:
+                            raise AIInvalidResponseError(
+                                'The AI provider response exceeded the allowed size.'
+                            )
+                        yield text
+                elif event_type == 'message_delta':
+                    if (event.get('delta') or {}).get('stop_reason') == 'max_tokens':
+                        raise AIIncompleteResponseError(
+                            'The AI provider ran out of tokens before it could finish the answer.'
+                        )
+                elif event_type == 'message_stop':
+                    finished = True
+                    break
+                elif event_type == 'error':
+                    raise AIProviderUnavailableError(
+                        'The AI provider could not complete the request. Please try again.'
+                    )
+            if not finished:
+                raise AIInvalidResponseError(
+                    'The AI provider stream ended before it was complete.'
+                )
+            if not emitted:
+                raise AIInvalidResponseError('The AI provider returned an empty response.')
+        except requests.exceptions.Timeout:
+            raise AIProviderTimeoutError(
+                'The AI provider did not respond in time. Please try again.'
+            )
+        except requests.exceptions.RequestException:
+            raise AIProviderUnavailableError(
+                'The AI provider connection was interrupted. Please try again.'
+            )
+        finally:
+            response.close()
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ import {
   getCachedExplanation,
   getFindingDetail,
   removeCachedExplanation,
-  requestExplanation,
+  streamExplanation,
 } from '../../services/aiExplanationService';
 
 /**
@@ -23,7 +23,7 @@ import {
  *   * the explanation itself is produced by the AI provider on the server.
  *     The provider credentials never reach this component.
  *
- * States: idle (nothing generated yet) → loading → ready | empty | error.
+ * States: idle → thinking → generating → completed | empty | error.
  */
 
 const FOCUSABLE_SELECTOR = [
@@ -127,20 +127,6 @@ const SkeletonBlock = ({ className = 'h-4 w-full' }) => (
   <div className={`skeleton ${className}`} />
 );
 
-const LoadingSkeleton = () => (
-  <div className="space-y-6" role="status" aria-live="polite">
-    <span className="sr-only">Generating the AI explanation…</span>
-    {[0, 1, 2, 3].map((index) => (
-      <div key={index} className="space-y-2">
-        <SkeletonBlock className="h-3 w-24" />
-        <SkeletonBlock className="h-4 w-full" />
-        <SkeletonBlock className="h-4 w-11/12" />
-        <SkeletonBlock className="h-4 w-8/12" />
-      </div>
-    ))}
-  </div>
-);
-
 const AIExplanationOverlay = ({
   scanId,
   findingId,
@@ -156,15 +142,27 @@ const AIExplanationOverlay = ({
   const explainInFlightRef = useRef(false);
 
   const [detail, setDetail] = useState(null);
+  const [detailForKey, setDetailForKey] = useState(null);
   const [detailState, setDetailState] = useState('loading');
   const [detailError, setDetailError] = useState(null);
 
   const [explanation, setExplanation] = useState(null);
+  const [explanationForKey, setExplanationForKey] = useState(null);
   const [explanationState, setExplanationState] = useState('idle');
   const [explanationError, setExplanationError] = useState(null);
 
-  const finding = detail?.finding || null;
-  const sourceContext = detail?.source_context || null;
+  const targetKey = `${scanId}::${findingId}`;
+  const targetDetail = detailForKey === targetKey ? detail : null;
+  const targetDetailState = detailForKey === targetKey ? detailState : 'loading';
+  const targetDetailError = detailForKey === targetKey ? detailError : null;
+  const targetExplanation = explanationForKey === targetKey ? explanation : null;
+  const targetExplanationState =
+    explanationForKey === targetKey ? explanationState : 'idle';
+  const targetExplanationError =
+    explanationForKey === targetKey ? explanationError : null;
+
+  const finding = targetDetail?.finding || null;
+  const sourceContext = targetDetail?.source_context || null;
 
   // ── Load the authoritative finding data ───────────────────────────────────
   useEffect(() => {
@@ -177,6 +175,8 @@ const AIExplanationOverlay = ({
     detailAbortRef.current = controller;
     let cancelled = false;
 
+    setDetailForKey(`${scanId}::${findingId}`);
+    setDetail(null);
     setDetailState('loading');
     setDetailError(null);
 
@@ -203,11 +203,12 @@ const AIExplanationOverlay = ({
     requestSeqRef.current += 1;
     explainInFlightRef.current = false;
     explainAbortRef.current?.abort();
+    setExplanationForKey(`${scanId}::${findingId}`);
 
     const cached = getCachedExplanation(scanId, findingId);
     if (cached?.explanation && hasContent(cached.explanation)) {
       setExplanation(cached.explanation);
-      setExplanationState('ready');
+      setExplanationState('completed');
     } else {
       setExplanation(null);
       setExplanationState('idle');
@@ -223,17 +224,26 @@ const AIExplanationOverlay = ({
 
       explainInFlightRef.current = true;
       const seq = (requestSeqRef.current += 1);
+      setExplanationForKey(`${scanId}::${findingId}`);
 
       const controller = new AbortController();
       explainAbortRef.current = controller;
 
-      setExplanationState('loading');
+      setExplanationState('thinking');
+      setExplanation(null);
       setExplanationError(null);
 
       try {
         if (force) removeCachedExplanation(scanId, findingId);
-        const payload = await requestExplanation(scanId, findingId, {
+        let streamedText = '';
+        const payload = await streamExplanation(scanId, findingId, {
           signal: controller.signal,
+          onChunk: (chunk) => {
+            if (seq !== requestSeqRef.current || controller.signal.aborted) return;
+            streamedText += chunk;
+            setExplanationState('generating');
+            setExplanation({ format: 'text', raw_markdown: streamedText });
+          },
         });
         if (seq !== requestSeqRef.current) return; // a newer request won
 
@@ -243,7 +253,7 @@ const AIExplanationOverlay = ({
           setExplanationState('empty');
         } else {
           setExplanation(result);
-          setExplanationState('ready');
+          setExplanationState('completed');
         }
       } catch (error) {
         if (seq !== requestSeqRef.current) return;
@@ -331,8 +341,8 @@ const AIExplanationOverlay = ({
   // A modal without a target is an error state from the very first render —
   // it must not flash a loading skeleton and it must not depend on an effect.
   const missingTarget = !scanId || !findingId;
-  const detailStatus = missingTarget ? 'error' : detailState;
-  const detailFailure = missingTarget ? MISSING_TARGET_ERROR : detailError;
+  const detailStatus = missingTarget ? 'error' : targetDetailState;
+  const detailFailure = missingTarget ? MISSING_TARGET_ERROR : targetDetailError;
 
   const severity = String(finding?.severity || findingProp?.severity || '').toLowerCase();
   const title =
@@ -349,21 +359,24 @@ const AIExplanationOverlay = ({
   }, [finding?.line, finding?.end_line]);
 
   const generatedMeta = useMemo(() => {
-    if (!explanation) return '';
+    if (!targetExplanation) return '';
     const parts = [];
-    if (explanation.provider) parts.push(explanation.provider);
-    if (explanation.model) parts.push(explanation.model);
-    const stamp = formatTimestamp(explanation.generated_at);
+    if (targetExplanation.provider) parts.push(targetExplanation.provider);
+    if (targetExplanation.model) parts.push(targetExplanation.model);
+    const stamp = formatTimestamp(targetExplanation.generated_at);
     if (stamp) parts.push(stamp);
     return parts.join(' · ');
-  }, [explanation]);
+  }, [targetExplanation]);
 
   const codeLines = useMemo(() => {
     if (!sourceContext?.code) return [];
     return String(sourceContext.code).split('\n');
   }, [sourceContext?.code]);
 
-  const canGenerate = Boolean(scanId && findingId) && explanationState !== 'loading';
+  const canGenerate =
+    Boolean(scanId && findingId) &&
+    targetExplanationState !== 'thinking' &&
+    targetExplanationState !== 'generating';
 
   return (
     <div
@@ -528,7 +541,7 @@ const AIExplanationOverlay = ({
 
             {/* ── Right: the explanation ─────────────────────────────────── */}
             <section className="p-4 sm:p-6 space-y-6 min-w-0">
-              {explanationState === 'idle' && (
+              {targetExplanationState === 'idle' && (
                 <div className="flex flex-col items-center justify-center text-center py-10 sm:py-16">
                   <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mb-4">
                     <Icon name="Sparkles" size={28} className="text-primary" aria-hidden="true" />
@@ -552,9 +565,32 @@ const AIExplanationOverlay = ({
                 </div>
               )}
 
-              {explanationState === 'loading' && <LoadingSkeleton />}
+              {targetExplanationState === 'thinking' && (
+                <div
+                  className="flex flex-col items-center justify-center text-center py-10 sm:py-16 animate-fade-in"
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                >
+                  <div className="flex items-center gap-1.5 mb-5" aria-hidden="true">
+                    {[0, 1, 2].map((dot) => (
+                      <span
+                        key={dot}
+                        className="w-2 h-2 rounded-full bg-primary motion-safe:animate-pulse"
+                        style={{ animationDelay: `${dot * 180}ms` }}
+                      />
+                    ))}
+                  </div>
+                  <h3 className="text-lg font-heading font-semibold text-foreground">
+                    Thinking through this vulnerability
+                  </h3>
+                  <p className="text-sm text-muted-foreground mt-2 max-w-md">
+                    Analyzing the finding and preparing an explanation...
+                  </p>
+                </div>
+              )}
 
-              {explanationState === 'empty' && (
+              {targetExplanationState === 'empty' && (
                 <div className="flex flex-col items-center justify-center text-center py-10 sm:py-16" role="status">
                   <div className="w-16 h-16 bg-muted/30 rounded-full flex items-center justify-center mb-4">
                     <Icon name="MessageSquareOff" size={28} color="var(--color-muted-foreground)" />
@@ -579,7 +615,7 @@ const AIExplanationOverlay = ({
                 </div>
               )}
 
-              {explanationState === 'error' && (
+              {targetExplanationState === 'error' && (
                 <div
                   className="rounded-lg border border-error/30 bg-error/5 p-4 sm:p-5"
                   role="alert"
@@ -596,18 +632,19 @@ const AIExplanationOverlay = ({
                         The explanation could not be generated
                       </h3>
                       <p className="text-sm text-foreground mt-1 break-words">
-                        {explanationError?.message ||
-                          ERROR_HINTS[explanationError?.code] ||
+                        {targetExplanationError?.message ||
+                          ERROR_HINTS[targetExplanationError?.code] ||
                           'The request failed. Please try again.'}
                       </p>
-                      {explanationError?.code && ERROR_HINTS[explanationError.code] ? (
+                      {targetExplanationError?.code &&
+                      ERROR_HINTS[targetExplanationError.code] ? (
                         <p className="text-xs text-muted-foreground mt-2">
-                          {ERROR_HINTS[explanationError.code]}
+                          {ERROR_HINTS[targetExplanationError.code]}
                         </p>
                       ) : null}
-                      {explanationError?.code ? (
+                      {targetExplanationError?.code ? (
                         <p className="text-[11px] font-data text-muted-foreground mt-2">
-                          Error code: {explanationError.code}
+                          Error code: {targetExplanationError.code}
                         </p>
                       ) : null}
                       <div className="flex flex-wrap gap-2 mt-4">
@@ -627,38 +664,72 @@ const AIExplanationOverlay = ({
                 </div>
               )}
 
-              {explanationState === 'ready' && explanation && (
-                <div className="space-y-6">
-                  {explanation.summary ? (
+              {(targetExplanationState === 'generating' ||
+                targetExplanationState === 'completed') &&
+                targetExplanation && (
+                <div className="space-y-6 animate-fade-in">
+                  {targetExplanationState === 'generating' ? (
+                    <div role="status" aria-live="polite" aria-atomic="true">
+                      <h3 className="text-sm font-heading font-semibold text-primary">
+                        Generating response
+                      </h3>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Preparing the explanation and recommended fixes...
+                      </p>
+                    </div>
+                  ) : (
+                    <p
+                      className="text-xs font-medium text-success"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      Explanation ready
+                    </p>
+                  )}
+
+                  {targetExplanation.format === 'text' && targetExplanation.raw_markdown ? (
+                    <div aria-live="off">
+                      <Markdown content={targetExplanation.raw_markdown} />
+                      {targetExplanationState === 'generating' ? (
+                        <span
+                          className="inline-block w-1.5 h-4 ml-1 align-middle bg-primary motion-safe:animate-pulse"
+                          aria-hidden="true"
+                        />
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {targetExplanation.format !== 'text' && targetExplanation.summary ? (
                     <Section letter="A" title="Summary">
                       <p className="text-sm text-foreground/90 leading-relaxed">
-                        {explanation.summary}
+                        {targetExplanation.summary}
                       </p>
                     </Section>
                   ) : null}
 
-                  {explanation.what_it_means ? (
+                  {targetExplanation.format !== 'text' && targetExplanation.what_it_means ? (
                     <Section letter="B" title="What it means">
-                      <Markdown content={explanation.what_it_means} />
+                      <Markdown content={targetExplanation.what_it_means} />
                     </Section>
                   ) : null}
 
-                  {explanation.why_it_matters ? (
+                  {targetExplanation.format !== 'text' && targetExplanation.why_it_matters ? (
                     <Section letter="C" title="Why it matters">
-                      <Markdown content={explanation.why_it_matters} />
+                      <Markdown content={targetExplanation.why_it_matters} />
                     </Section>
                   ) : null}
 
-                  {explanation.where_it_occurs ? (
+                  {targetExplanation.format !== 'text' && targetExplanation.where_it_occurs ? (
                     <Section letter="D" title="Where it occurs">
-                      <Markdown content={explanation.where_it_occurs} />
+                      <Markdown content={targetExplanation.where_it_occurs} />
                     </Section>
                   ) : null}
 
-                  {explanation.how_to_fix?.length ? (
+                  {targetExplanation.format !== 'text' &&
+                  targetExplanation.how_to_fix?.length ? (
                     <Section letter="E" title="How to fix">
                       <ol className="space-y-2 list-decimal pl-5 marker:text-muted-foreground">
-                        {explanation.how_to_fix.map((step, index) => (
+                        {targetExplanation.how_to_fix.map((step, index) => (
                           <li key={`step-${index}`} className="text-sm text-foreground/90">
                             <Markdown content={step} className="!text-sm" />
                           </li>
@@ -667,7 +738,8 @@ const AIExplanationOverlay = ({
                     </Section>
                   ) : null}
 
-                  {explanation.safer_example?.code ? (
+                  {targetExplanation.format !== 'text' &&
+                  targetExplanation.safer_example?.code ? (
                     <Section letter="F" title="Safer example (illustrative)">
                       <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 mb-3 flex items-start gap-2">
                         <Icon
@@ -685,29 +757,30 @@ const AIExplanationOverlay = ({
                       <div className="rounded-lg border border-success/30 bg-success/5 overflow-hidden">
                         <div className="px-3 py-2 border-b border-success/30 text-[11px] font-medium text-success">
                           Illustrative fix
-                          {explanation.safer_example.language
-                            ? ` · ${explanation.safer_example.language}`
+                          {targetExplanation.safer_example.language
+                            ? ` · ${targetExplanation.safer_example.language}`
                             : ''}
                         </div>
                         <pre className="p-3 overflow-x-auto text-xs font-data text-foreground whitespace-pre">
-                          <code>{explanation.safer_example.code}</code>
+                          <code>{targetExplanation.safer_example.code}</code>
                         </pre>
                       </div>
-                      {explanation.safer_example.note ? (
+                      {targetExplanation.safer_example.note ? (
                         <p className="text-xs text-muted-foreground mt-2">
-                          {explanation.safer_example.note}
+                          {targetExplanation.safer_example.note}
                         </p>
                       ) : null}
                     </Section>
                   ) : null}
 
-                  {explanation.additional_recommendations?.length ? (
+                  {targetExplanation.format !== 'text' &&
+                  targetExplanation.additional_recommendations?.length ? (
                     <div>
                       <h3 className="text-sm font-heading font-semibold text-foreground mb-2">
                         Additional recommendations
                       </h3>
                       <ul className="space-y-1.5 list-disc pl-5 marker:text-muted-foreground">
-                        {explanation.additional_recommendations.map((item, index) => (
+                        {targetExplanation.additional_recommendations.map((item, index) => (
                           <li key={`rec-${index}`} className="text-sm text-foreground/90">
                             <Markdown content={item} className="!text-sm" />
                           </li>
@@ -716,13 +789,14 @@ const AIExplanationOverlay = ({
                     </div>
                   ) : null}
 
-                  {explanation.references?.length ? (
+                  {targetExplanation.format !== 'text' &&
+                  targetExplanation.references?.length ? (
                     <div>
                       <h3 className="text-sm font-heading font-semibold text-foreground mb-2">
                         References
                       </h3>
                       <ul className="space-y-1.5">
-                        {explanation.references.map((reference, index) => (
+                        {targetExplanation.references.map((reference, index) => (
                           <li key={`ref-${index}`} className="text-sm">
                             <a
                               href={reference.url}
@@ -739,19 +813,21 @@ const AIExplanationOverlay = ({
                   ) : null}
 
                   <div className="pt-4 border-t border-border flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-[11px] text-muted-foreground">
-                      {generatedMeta || 'Generated by the configured AI provider.'}
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      iconName="RefreshCw"
-                      iconPosition="left"
-                      onClick={() => generate({ force: true })}
-                      disabled={!canGenerate}
-                    >
-                      Regenerate
-                    </Button>
+                    <>
+                      <p className="text-[11px] text-muted-foreground">
+                        {generatedMeta || 'Generated by the configured AI provider.'}
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        iconName="RefreshCw"
+                        iconPosition="left"
+                        onClick={() => generate({ force: true })}
+                        disabled={!canGenerate}
+                      >
+                        Regenerate
+                      </Button>
+                    </>
                   </div>
                 </div>
               )}
@@ -771,7 +847,7 @@ const AIExplanationOverlay = ({
                 iconName="Download"
                 iconPosition="left"
                 onClick={() => onExport('pdf')}
-                disabled={explanationState !== 'ready'}
+                disabled={targetExplanationState !== 'completed'}
               >
                 Export Report
               </Button>

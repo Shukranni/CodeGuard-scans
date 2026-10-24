@@ -89,7 +89,11 @@ export const normalizeError = (error) => {
   const response = error?.response;
 
   if (!response) {
-    if (error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
+    if (
+      error?.name === 'CanceledError' ||
+      error?.name === 'AbortError' ||
+      error?.code === 'ERR_CANCELED'
+    ) {
       return new AiExplanationError('Request cancelled.', {
         code: 'cancelled',
         retryable: true,
@@ -202,6 +206,180 @@ export const requestExplanation = async (scanId, findingId, options = {}) => {
   }
 };
 
+const streamUrl = (scanId, findingId) => {
+  const baseUrl = String(api.defaults.baseURL || '').replace(/\/+$/, '');
+  return `${baseUrl}/api/scans/${encodeURIComponent(scanId)}/findings/${encodeFindingId(
+    findingId,
+  )}/explain/?stream=1`;
+};
+
+const fetchStream = async (url, body, signal) => {
+  const accessToken = () => window.localStorage?.getItem('access_token');
+  const clearAuthentication = () => {
+    window.localStorage?.removeItem('access_token');
+    window.localStorage?.removeItem('refresh_token');
+    window.dispatchEvent(new Event('auth:logout'));
+  };
+  const send = (token) =>
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+  let response = await send(accessToken());
+  if (response.status !== 401) return response;
+
+  const refresh = window.localStorage?.getItem('refresh_token');
+  if (!refresh) {
+    clearAuthentication();
+    return response;
+  }
+
+  let data;
+  try {
+    ({ data } = await api.post(
+      '/api/auth/token/refresh/',
+      { refresh },
+      { signal },
+    ));
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    clearAuthentication();
+    throw error;
+  }
+
+  window.localStorage?.setItem('access_token', data.access);
+  if (data.refresh) window.localStorage?.setItem('refresh_token', data.refresh);
+  response = await send(data.access);
+  if (response.status !== 401) return response;
+
+  clearAuthentication();
+  return response;
+};
+
+const parseSseFrame = (frame) => {
+  let event = 'message';
+  const data = [];
+  frame.split(/\r?\n/).forEach((line) => {
+    if (line.startsWith('event:')) event = line.slice(6).trim();
+    else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+  });
+  if (!data.length) return null;
+  try {
+    return { event, data: JSON.parse(data.join('\n')) };
+  } catch {
+    throw new AiExplanationError('The server returned an invalid streamed response.', {
+      code: 'ai_invalid_response',
+      retryable: true,
+    });
+  }
+};
+
+/**
+ * Consume a genuine server-sent event stream from the configured AI provider.
+ * Content callbacks are invoked only for text actually received from the server.
+ */
+export const streamExplanation = async (scanId, findingId, options = {}) => {
+  if (!scanId || !findingId) {
+    throw new AiExplanationError(
+      'A scan and a finding must be selected before an explanation can be requested.',
+      { code: 'missing_identifiers', retryable: false },
+    );
+  }
+
+  let reader;
+  try {
+    const response = await fetchStream(
+      streamUrl(scanId, findingId),
+      { finding_id: findingId },
+      options.signal,
+    );
+    if (!response.ok) {
+      let body = {};
+      try {
+        body = await response.json();
+      } catch {
+        body = {};
+      }
+      throw normalizeError({ response: { status: response.status, data: body } });
+    }
+    if (!response.body?.getReader) {
+      throw new AiExplanationError('Streaming is not available in this browser.', {
+        code: 'stream_unavailable',
+        retryable: false,
+      });
+    }
+
+    reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let pending = '';
+    let completedPayload = null;
+
+    const handleFrame = (frame) => {
+      const parsed = parseSseFrame(frame);
+      if (!parsed) return;
+      if (parsed.event === 'content') {
+        if (typeof parsed.data?.text !== 'string') {
+          throw new AiExplanationError('The server returned an invalid streamed response.', {
+            code: 'ai_invalid_response',
+            retryable: true,
+          });
+        }
+        if (parsed.data.text) options.onChunk?.(parsed.data.text);
+      } else if (parsed.event === 'complete') {
+        completedPayload = parsed.data;
+      } else if (parsed.event === 'error') {
+        throw normalizeError({
+          response: { status: 502, data: parsed.data || {} },
+        });
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      pending += decoder.decode(value, { stream: !done });
+      let boundary = pending.match(/\r?\n\r?\n/);
+      while (boundary) {
+        const frame = pending.slice(0, boundary.index);
+        pending = pending.slice(boundary.index + boundary[0].length);
+        handleFrame(frame);
+        boundary = pending.match(/\r?\n\r?\n/);
+      }
+      if (done) break;
+    }
+    if (pending.trim()) handleFrame(pending);
+    if (
+      !completedPayload?.explanation ||
+      typeof completedPayload.explanation !== 'object' ||
+      Array.isArray(completedPayload.explanation)
+    ) {
+      throw new AiExplanationError('The explanation stream ended before completion.', {
+        code: 'stream_interrupted',
+        retryable: true,
+      });
+    }
+
+    explanationCache.set(cacheKey(scanId, findingId), completedPayload);
+    return completedPayload;
+  } catch (error) {
+    throw normalizeError(error);
+  } finally {
+    if (reader) {
+      try {
+        await reader.cancel();
+      } catch {
+        // The stream may already have been closed or aborted.
+      }
+      reader.releaseLock();
+    }
+  }
+};
+
 export default {
   clearExplanationCache,
   removeCachedExplanation,
@@ -211,4 +389,5 @@ export default {
   normalizeError,
   getFindingDetail,
   requestExplanation,
+  streamExplanation,
 };
