@@ -27,10 +27,9 @@ import Alert from '../../components/ui/Alert';
 import EmptyState from '../../components/ui/EmptyState';
 import ErrorState from '../../components/ui/ErrorState';
 import { Skeleton, LoadingRegion } from '../../components/ui/Skeleton';
+import Select from '../../components/ui/Select';
+import { Checkbox } from '../../components/ui/Checkbox';
 
-import RiskScoreCard from './components/RiskScoreCard';
-import SeverityDistributionChart from './components/SeverityDistributionChart';
-import FilterPanel from './components/FilterPanel';
 import FindingRow from './components/FindingRow';
 import ScanSummaryStats from './components/ScanSummaryStats';
 import ExportMenu from './components/ExportMenu';
@@ -83,6 +82,19 @@ const summariseFindings = (findings) => {
   return { distribution, filesMap, topRiskyFiles, score };
 };
 
+const OWASP_CATEGORIES = [
+  'A01:2021 - Broken Access Control',
+  'A02:2021 - Cryptographic Failures',
+  'A03:2021 - Injection',
+  'A04:2021 - Insecure Design',
+  'A05:2021 - Security Misconfiguration',
+  'A06:2021 - Vulnerable Components',
+  'A07:2021 - Identification and Authentication Failures',
+  'A08:2021 - Software and Data Integrity Failures',
+  'A09:2021 - Security Logging and Monitoring Failures',
+  'A10:2021 - Server-Side Request Forgery',
+];
+
 const ScanResults = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -104,7 +116,10 @@ const ScanResults = () => {
     language: 'all',
     owaspCategories: [],
     showDismissed: false,
+    confidence: 'all',
   });
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
 
   /**
    * Resolve the scan ID from (in priority order):
@@ -304,8 +319,10 @@ const ScanResults = () => {
       language: 'all',
       owaspCategories: [],
       showDismissed: false,
+      confidence: 'all',
     });
     setSearchQuery('');
+    setSelectedFile(null);
   };
 
   const handleViewDetails = (finding) => {
@@ -640,6 +657,7 @@ const ScanResults = () => {
         ) {
           return false;
         }
+        if (selectedFile && finding?.file !== selectedFile) return false;
         if (
           searchQuery &&
           !finding?.title?.toLowerCase()?.includes(searchQuery?.toLowerCase()) &&
@@ -655,7 +673,7 @@ const ScanResults = () => {
         return true;
       }) || []
     );
-  }, [scanData?.findings, filters, searchQuery]);
+  }, [scanData?.findings, filters, searchQuery, selectedFile]);
 
   const sortedFindings = useMemo(() => {
     return [...filteredFindings].sort((a, b) => {
@@ -777,7 +795,7 @@ const ScanResults = () => {
     >
       <div className="mx-auto max-w-[1400px] space-y-6">
         <PageHeader
-          title="Scan results"
+          title="Scan Results"
           description={scanData?.projectName}
           actions={
             <>
@@ -787,7 +805,7 @@ const ScanResults = () => {
                 iconPosition="left"
                 onClick={openCodeExplorer}
               >
-                Code explorer
+                Code Explorer
               </Button>
               <ExportMenu onExport={handleExport} />
               <Button
@@ -796,7 +814,7 @@ const ScanResults = () => {
                 iconPosition="left"
                 onClick={() => navigate('/new-scan-setup')}
               >
-                New scan
+                New Scan
               </Button>
             </>
           }
@@ -832,47 +850,90 @@ const ScanResults = () => {
         <ScanSummaryStats stats={scanData?.stats} />
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <RiskScoreCard
-            score={scanData?.overallRiskScore}
-            trend={scanData?.riskTrend}
-            label="Overall risk score"
-          />
-          <div className="lg:col-span-2">
-            <SeverityDistributionChart data={scanData?.severityDistribution} />
+          <div className="lg:col-span-3">
+            <TopRiskyFiles files={scanData?.topRiskyFiles} onSelectFile={(path) => setSelectedFile(path)} selectedFile={selectedFile} />
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-2">
-            <FilterPanel
-              filters={filters}
-              findings={scanData?.findings || []}
-              onFilterChange={handleFilterChange}
-              onReset={handleResetFilters}
-              resultCount={filteredFindings?.length}
-            />
-          </div>
-          <TopRiskyFiles files={scanData?.topRiskyFiles} />
         </div>
 
         <section className="rounded-xl border border-border bg-card">
-          <div className="flex flex-col gap-3 border-b border-border px-4 py-4 md:flex-row md:items-center md:justify-between md:px-5">
-            <div className="min-w-0">
-              <h2 className="text-base font-semibold text-foreground">Vulnerability findings</h2>
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                {sortedFindings.length} of {scanData.findings.length} finding
-                {scanData.findings.length === 1 ? '' : 's'} shown
-              </p>
+          <div className="flex flex-col gap-3 border-b border-border px-4 py-4 md:px-5">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold text-foreground">Vulnerability findings</h2>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  {sortedFindings.length} of {scanData.findings.length} finding
+                  {scanData.findings.length === 1 ? '' : 's'} shown
+                  {selectedFile ? ` · Filtered by ${selectedFile.split('/').pop()}` : ''}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedFile && (
+                  <Button variant="ghost" size="sm" onClick={() => setSelectedFile(null)} iconName="X" iconPosition="left">
+                    Clear file filter
+                  </Button>
+                )}
+                <Button
+                  variant={advancedOpen ? 'default' : 'outline'}
+                  size="sm"
+                  onClick={() => setAdvancedOpen((open) => !open)}
+                  iconName="SlidersHorizontal"
+                  iconPosition="left"
+                >
+                  Advanced filters
+                  {(filters.owaspCategories?.length || 0) > 0 ? (
+                    <span className="ml-1.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
+                      {filters.owaspCategories.length}
+                    </span>
+                  ) : null}
+                </Button>
+              </div>
             </div>
 
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <Input
-                type="search"
-                aria-label="Search findings by title or file"
-                placeholder="Search by title or file…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e?.target?.value)}
-                className="w-full sm:w-64"
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="w-full sm:w-64">
+                <Input
+                  type="search"
+                  aria-label="Search findings by title or file"
+                  placeholder="Search by title or file…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e?.target?.value)}
+                />
+              </div>
+              <Select
+                options={[
+                  { value: 'all', label: 'All severities' },
+                  { value: 'critical', label: 'Critical' },
+                  { value: 'high', label: 'High' },
+                  { value: 'medium', label: 'Medium' },
+                  { value: 'low', label: 'Low' },
+                ]}
+                value={filters.severity}
+                onChange={(value) => handleFilterChange('severity', value)}
+                placeholder="Severity"
+              />
+              <Select
+                options={(() => {
+                  const scanners = Array.from(new Set((scanData.findings || []).map((f) => f.scanner).filter(Boolean)));
+                  return [
+                    { value: 'all', label: 'All scanners' },
+                    ...scanners.map((s) => ({ value: s.toLowerCase(), label: s })),
+                  ];
+                })()}
+                value={filters.scanner}
+                onChange={(value) => handleFilterChange('scanner', value)}
+                placeholder="Scanner"
+              />
+              <Select
+                options={(() => {
+                  const langs = Array.from(new Set((scanData.findings || []).map((f) => f.language).filter(Boolean)));
+                  return [
+                    { value: 'all', label: 'All languages' },
+                    ...langs.map((l) => ({ value: l, label: l })),
+                  ];
+                })()}
+                value={filters.language}
+                onChange={(value) => handleFilterChange('language', value)}
+                placeholder="Language"
               />
               <div className="flex gap-2" role="group" aria-label="Sort findings">
                 <Button
@@ -896,7 +957,60 @@ const ScanResults = () => {
                   Confidence
                 </Button>
               </div>
+              {(filters.severity !== 'all' || filters.scanner !== 'all' || filters.language !== 'all' || filters.owaspCategories?.length || filters.showDismissed || searchQuery || selectedFile) && (
+                <Button variant="ghost" size="sm" onClick={handleResetFilters} iconName="RotateCcw" iconPosition="left">
+                  Reset
+                </Button>
+              )}
             </div>
+
+            {advancedOpen && (
+              <div className="rounded-lg border border-border bg-muted/20 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-foreground">Advanced filters</h3>
+                  <Button variant="ghost" size="sm" onClick={() => setAdvancedOpen(false)}>Close</Button>
+                </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">OWASP Top 10 (2021)</p>
+                    <div className="max-h-48 overflow-auto rounded-md border border-border bg-card">
+                      <div className="divide-y divide-border">
+                        {OWASP_CATEGORIES.map((category) => {
+                          const count = (scanData.findings || []).filter((f) => f.owasp?.includes(category.split(':')[0])).length;
+                          const checked = (filters.owaspCategories || []).includes(category);
+                          return (
+                            <label key={category} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/40">
+                              <Checkbox
+                                checked={checked}
+                                disabled={count === 0}
+                                onChange={(e) => {
+                                  const next = e?.target?.checked
+                                    ? [...(filters.owaspCategories || []), category]
+                                    : (filters.owaspCategories || []).filter((c) => c !== category);
+                                  handleFilterChange('owaspCategories', next);
+                                }}
+                              />
+                              <span className="flex-1 min-w-0">
+                                <span className="block text-foreground">{category}</span>
+                                <span className="block text-xs text-muted-foreground">{count} finding{count === 1 ? '' : 's'}</span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <Checkbox
+                      label="Show dismissed findings"
+                      checked={filters.showDismissed}
+                      onChange={(e) => handleFilterChange('showDismissed', e?.target?.checked)}
+                    />
+                    <p className="text-xs text-muted-foreground">Dismissed findings are hidden by default and remain distinct from resolved scans.</p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="p-4 md:p-5">

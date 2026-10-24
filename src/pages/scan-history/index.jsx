@@ -2,12 +2,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AppShell from '../../components/layout/AppShell';
 import PageHeader from '../../components/layout/PageHeader';
-import FilterToolbar from '../../components/ui/FilterToolbar';
 import Select from '../../components/ui/Select';
 import Button from '../../components/ui/Button';
 import Icon from '../../components/AppIcon';
+import Input from '../../components/ui/Input';
 import ScanHistoryCard from './components/ScanHistoryCard';
-import SummaryDashboard from './components/SummaryDashboard';
 import QuickAccessSection from './components/QuickAccessSection';
 import BulkActionsBar from './components/BulkActionsBar';
 import ComparisonModal from './components/ComparisonModal';
@@ -107,7 +106,7 @@ const ScanHistory = () => {
   const [selectedScans, setSelectedScans] = useState([]);
   const [isComparisonModalOpen, setIsComparisonModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filters, setFilters] = useState({});
+  const [filters, setFilters] = useState({ status: 'all', severity: 'all', dateRange: 'all' });
   const [sortBy, setSortBy] = useState('date-desc');
 
   // ── Data fetching ────────────────────────────────────────────────────────────
@@ -241,8 +240,10 @@ const ScanHistory = () => {
   };
 
   const handleDelete = (scanId) => {
-    if (window.confirm('Are you sure you want to delete this scan?')) {
+    const scan = scans.find((s) => s.id === scanId);
+    if (window.confirm(`Delete scan "${scan?.projectName || scanId}"?`)) {
       setScans((prev) => prev.filter((s) => s.id !== scanId));
+      setSelectedScans((prev) => prev.filter((id) => id !== scanId));
     }
   };
 
@@ -276,7 +277,8 @@ const ScanHistory = () => {
   };
 
   const handleBulkDelete = () => {
-    if (window.confirm(`Delete ${selectedScans.length} scans?`)) {
+    if (selectedScans.length === 0) return;
+    if (window.confirm(`Delete ${selectedScans.length} scan(s)?`)) {
       setScans((prev) => prev.filter((s) => !selectedScans.includes(s.id)));
       setSelectedScans([]);
     }
@@ -313,8 +315,8 @@ const ScanHistory = () => {
     >
       <div className="mx-auto max-w-[1400px] space-y-6">
         <PageHeader
-          title="Scan history"
-          description="Review and manage your security analysis sessions"
+          title="Scan History"
+          description="Review and manage your security scans."
           actions={
             <Button
               variant="default"
@@ -351,8 +353,6 @@ const ScanHistory = () => {
         {/* Data */}
         {!loading && !error && scans.length > 0 && (
           <>
-            <SummaryDashboard summaryData={summaryData} />
-
             <QuickAccessSection
               recentScans={scans.slice(0, 3)}
               frequentProjects={frequentProjects}
@@ -360,25 +360,16 @@ const ScanHistory = () => {
               onStartNewScan={handleStartNewScan}
             />
 
-            <div className="bg-card border border-border rounded-lg p-6">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-semibold text-foreground flex items-center gap-2">
-                  <Icon name="History" size={24} />
-                  All Scans ({filteredAndSortedScans.length})
-                </h2>
-                <div className="flex items-center gap-3">
-                  <Select
-                    options={dateRangeOptions}
-                    value={filters.dateRange || 'all'}
-                    onChange={(value) => setFilters({ ...filters, dateRange: value })}
-                    placeholder="Date Range"
-                  />
-                  <Select
-                    options={sortOptions}
-                    value={sortBy}
-                    onChange={setSortBy}
-                    placeholder="Sort By"
-                  />
+            <div className="bg-card border border-border rounded-lg">
+              <div className="flex flex-col gap-4 border-b border-border px-4 py-4 md:flex-row md:items-center md:justify-between md:px-5">
+                <div>
+                  <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                    <Icon name="History" size={18} />
+                    Scans ({filteredAndSortedScans.length})
+                  </h2>
+                  <p className="mt-0.5 text-sm text-muted-foreground">Find and manage previous scans</p>
+                </div>
+                <div className="flex items-center gap-2">
                   <Button
                     variant="outline"
                     size="sm"
@@ -391,14 +382,69 @@ const ScanHistory = () => {
                 </div>
               </div>
 
-              <FilterToolbar
-                onSearchChange={setSearchQuery}
-                onFilterChange={setFilters}
-                searchPlaceholder="Search by project name..."
-                showExport={false}
-              />
+              <div className="flex flex-col gap-3 px-4 py-3 md:flex-row md:flex-wrap md:items-center md:px-5">
+                <div className="w-full md:w-64">
+                  <Input
+                    type="search"
+                    placeholder="Search by project name..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e?.target?.value)}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select
+                    options={[
+                      { value: 'all', label: 'All Status' },
+                      { value: 'completed', label: 'Completed' },
+                      { value: 'completed with warnings', label: 'Completed with warnings' },
+                      { value: 'resolved', label: 'Resolved' },
+                      { value: 'failed', label: 'Failed' },
+                    ]}
+                    value={filters.status || 'all'}
+                    onChange={(value) => setFilters({ ...filters, status: value })}
+                    placeholder="Status"
+                  />
+                  <Select
+                    options={[
+                      { value: 'all', label: 'All Severities' },
+                      { value: 'high', label: 'High+' },
+                      { value: 'medium', label: 'Medium+' },
+                      { value: 'low', label: 'Low+' },
+                    ]}
+                    value={filters.severity || 'all'}
+                    onChange={(value) => setFilters({ ...filters, severity: value })}
+                    placeholder="Severity"
+                  />
+                  <Select
+                    options={dateRangeOptions}
+                    value={filters.dateRange || 'all'}
+                    onChange={(value) => setFilters({ ...filters, dateRange: value })}
+                    placeholder="Date Range"
+                  />
+                  <Select
+                    options={sortOptions}
+                    value={sortBy}
+                    onChange={setSortBy}
+                    placeholder="Sort By"
+                  />
+                </div>
+                {(searchQuery || (filters.status && filters.status !== 'all') || (filters.severity && filters.severity !== 'all') || (filters.dateRange && filters.dateRange !== 'all')) && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setFilters({ status: 'all', severity: 'all', dateRange: 'all' });
+                    }}
+                    iconName="X"
+                    iconPosition="left"
+                  >
+                    Reset
+                  </Button>
+                )}
+              </div>
 
-              <div className="space-y-4 mt-6">
+              <div className="divide-y divide-border">
                 {filteredAndSortedScans.length > 0 ? (
                   filteredAndSortedScans.map((scan) => (
                     <ScanHistoryCard
@@ -414,9 +460,9 @@ const ScanHistory = () => {
                   ))
                 ) : (
                   <div className="text-center py-12">
-                    <Icon name="Search" size={48} className="text-muted-foreground mx-auto mb-4" />
-                    <p className="text-lg text-muted-foreground">No scans match your filters</p>
-                    <p className="text-sm text-muted-foreground mt-2">
+                    <Icon name="Search" size={40} className="text-muted-foreground mx-auto mb-3" />
+                    <p className="text-base text-foreground">No scans match your filters</p>
+                    <p className="text-sm text-muted-foreground mt-1">
                       Try adjusting your search or filters
                     </p>
                   </div>
