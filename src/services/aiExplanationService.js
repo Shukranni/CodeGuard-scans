@@ -16,6 +16,7 @@
  * can survive a change of account.
  */
 import api from '../utils/api';
+import { normalizeAiText, normalizeTextEncoding } from '../utils/normalizeTextEncoding';
 
 /** Normalised error thrown by every function in this module. */
 export class AiExplanationError extends Error {
@@ -191,7 +192,7 @@ export const requestExplanation = async (scanId, findingId, options = {}) => {
       { signal: options.signal },
     );
 
-    const explanation = data?.explanation ?? null;
+    const explanation = normalizeAiText(data?.explanation ?? null);
     const payload = {
       finding: data?.finding ?? null,
       source_context: data?.source_context ?? null,
@@ -228,7 +229,7 @@ export const chatAboutFinding = async (scanId, findingId, message, history = [],
         retryable: true,
       });
     }
-    return data;
+    return { ...data, answer: normalizeTextEncoding(data.answer) };
   } catch (error) {
     throw normalizeError(error);
   }
@@ -360,7 +361,7 @@ export const streamExplanation = async (scanId, findingId, options = {}) => {
         }
         if (parsed.data.text) options.onChunk?.(parsed.data.text);
       } else if (parsed.event === 'complete') {
-        completedPayload = parsed.data;
+        completedPayload = normalizeAiText(parsed.data);
       } else if (parsed.event === 'error') {
         throw normalizeError({
           response: { status: 502, data: parsed.data || {} },

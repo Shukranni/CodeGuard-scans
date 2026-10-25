@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { normalizeTextEncoding } from '../../utils/normalizeTextEncoding';
 
 /**
  * Minimal, dependency-free Markdown renderer for AI generated text.
@@ -244,7 +245,8 @@ const headingClasses = {
 };
 
 const Markdown = ({ content, className = '' }) => {
-  const blocks = useMemo(() => parseBlocks(content), [content]);
+  const normalizedContent = normalizeTextEncoding(content);
+  const blocks = useMemo(() => parseBlocks(normalizedContent), [normalizedContent]);
 
   if (!blocks.length) return null;
 

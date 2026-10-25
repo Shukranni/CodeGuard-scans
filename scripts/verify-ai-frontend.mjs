@@ -122,6 +122,40 @@ console.log('\nMarkdown renderer');
 
   const quote = render(Markdown, { content: '> quoted' });
   check('block quotes are rendered', quote.includes('<blockquote'));
+
+  const mojibake = render(Markdown, {
+    content: 'CWEâ€“521 and a userâ€™s password',
+  });
+  check(
+    'UTF-8 text misread as Windows-1252 is repaired',
+    mojibake.includes('CWE–521 and a user’s password'),
+    mojibake,
+  );
+
+  const unicode = render(Markdown, { content: 'CWE–521 and a user’s password' });
+  check(
+    'correct Unicode punctuation is preserved',
+    unicode.includes('CWE–521 and a user’s password'),
+    unicode,
+  );
+
+  const mixedUnicode = render(Markdown, {
+    content: 'CWEâ€“521: protéger le mot de passe de l’utilisateur',
+  });
+  check(
+    'repair leaves neighboring Unicode accents intact',
+    mixedUnicode.includes('CWE–521: protéger le mot de passe de l’utilisateur'),
+    mixedUnicode,
+  );
+
+  const latin1Mojibake = render(Markdown, {
+    content: 'A userâ\u0080\u0099s password and a commonâ\u0080\u0093password check',
+  });
+  check(
+    'UTF-8 punctuation decoded as Latin-1 is repaired',
+    latin1Mojibake.includes('A user’s password and a common–password check'),
+    latin1Mojibake,
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,16 +213,22 @@ console.log('\nAI explanation service');
     },
     dispatchEvent: () => {},
   };
-  const markdown = '## Vulnerability overview\n\nEscape user input.';
+  const markdown = '## Vulnerability overview\n\nCWEâ€“521: Escape the userâ€™s input.';
   const finalPayload = {
     finding: { id: 'semgrep_0' },
     source_context: null,
-    explanation: { format: 'text', raw_markdown: markdown, provider: 'openai' },
+    explanation: {
+      format: 'text',
+      raw_markdown: markdown,
+      summary: 'CWEâ€“521',
+      how_to_fix: ['Escape the userâ€™s input.'],
+      provider: 'openai',
+    },
   };
   const encoder = new TextEncoder();
   const streamParts = [
     `event: content\ndata: ${JSON.stringify({ text: '## Vulnerability overview\n\n' })}\n\n`,
-    `event: content\ndata: ${JSON.stringify({ text: 'Escape user input.' })}\n\n`,
+    `event: content\ndata: ${JSON.stringify({ text: 'CWEâ€“521: Escape the userâ€™s input.' })}\n\n`,
     `event: complete\ndata: ${JSON.stringify(finalPayload)}\n\n`,
   ];
   globalThis.fetch = async (url, options) => {
@@ -213,8 +253,12 @@ console.log('\nAI explanation service');
     });
     check('only actual content events are appended progressively',
       received.join('') === markdown);
-    check('completion payload is returned without losing the streamed answer',
-      streamed.explanation.raw_markdown === markdown);
+    check('completion payload text is normalized before it reaches the UI',
+      streamed.explanation.raw_markdown ===
+        '## Vulnerability overview\n\nCWE–521: Escape the user’s input.');
+    check('nested explanation text is normalized too',
+      streamed.explanation.how_to_fix[0] === 'Escape the user’s input.' &&
+      streamed.explanation.summary === 'CWE–521');
     check('completed stream is cached for the same finding',
       service.getCachedExplanation('1', 'semgrep_0') === streamed);
 
