@@ -65,6 +65,9 @@ importers:
       framer-motion:
         specifier: ^10.16.4
         version: 10.18.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      highlight.js:
+        specifier: ^11.12.0
+        version: 11.12.0
       jspdf:
         specifier: ^4.2.1
         version: 4.2.1
@@ -1610,6 +1613,10 @@ packages:
   hex-rgb@4.3.0:
     resolution: {integrity: sha512-Ox1pJVrDCyGHMG9CFg1tmrRUMRPRsAWYc/PinY0XzJU4K7y7vjNoLKIQ7BR5UJMCxNN8EM1MNDmHWA/B3aZUuw==}
     engines: {node: '>=6'}
+
+  highlight.js@11.12.0:
+    resolution: {integrity: sha512-nbfWpyRMcMrPMmDwJB+dhX/eiaPKtc2RB+0QZskqJ3WjRA/FDS0e9hZrx8EC/lbEv8gXy98FcDbNa/dspAaJMg==}
+    engines: {node: '>=12.0.0'}
 
   hogan.js@2.0.0:
     resolution: {integrity: sha512-urTqVvefaiu6ZqpIVQklkbu6tuqUQSv0pfgnG02ibeAC4ZFG0Rj2uDjH45eUcIEyLFjPsh1mxgeqd9BYldWrgg==}
@@ -4183,6 +4190,8 @@ snapshots:
       function-bind: 1.1.2
 
   hex-rgb@4.3.0: {}
+
+  highlight.js@11.12.0: {}
 
   hogan.js@2.0.0: {}
 
