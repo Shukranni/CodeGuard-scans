@@ -5,6 +5,7 @@ import Markdown from '../ui/Markdown';
 import SeverityBadge from '../ui/SeverityBadge';
 import { cn } from '../../utils/cn';
 import {
+  chatAboutFinding,
   getCachedExplanation,
   getFindingDetail,
   removeCachedExplanation,
@@ -138,8 +139,11 @@ const AIExplanationOverlay = ({
   const dialogRef = useRef(null);
   const detailAbortRef = useRef(null);
   const explainAbortRef = useRef(null);
+  const chatAbortRef = useRef(null);
   const requestSeqRef = useRef(0);
   const explainInFlightRef = useRef(false);
+  const chatInFlightRef = useRef(false);
+  const chatRequestSeqRef = useRef(0);
 
   const [detail, setDetail] = useState(null);
   const [detailForKey, setDetailForKey] = useState(null);
@@ -150,6 +154,12 @@ const AIExplanationOverlay = ({
   const [explanationForKey, setExplanationForKey] = useState(null);
   const [explanationState, setExplanationState] = useState('idle');
   const [explanationError, setExplanationError] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatExpanded, setChatExpanded] = useState(false);
+  const [chatPending, setChatPending] = useState(false);
+  const [chatPendingMessage, setChatPendingMessage] = useState('');
+  const [chatError, setChatError] = useState(null);
 
   const targetKey = `${scanId}::${findingId}`;
   const targetDetail = detailForKey === targetKey ? detail : null;
@@ -203,6 +213,15 @@ const AIExplanationOverlay = ({
     requestSeqRef.current += 1;
     explainInFlightRef.current = false;
     explainAbortRef.current?.abort();
+    chatRequestSeqRef.current += 1;
+    chatInFlightRef.current = false;
+    chatAbortRef.current?.abort();
+    setChatMessages([]);
+    setChatInput('');
+    setChatExpanded(false);
+    setChatPending(false);
+    setChatPendingMessage('');
+    setChatError(null);
     setExplanationForKey(`${scanId}::${findingId}`);
 
     const cached = getCachedExplanation(scanId, findingId);
@@ -215,6 +234,45 @@ const AIExplanationOverlay = ({
     }
     setExplanationError(null);
   }, [scanId, findingId]);
+
+  const sendChatMessage = useCallback(
+    async (question = chatInput) => {
+      const content = String(question || '').trim();
+      if (!content || !scanId || !findingId || chatInFlightRef.current) return;
+
+      chatInFlightRef.current = true;
+      const requestSeq = (chatRequestSeqRef.current += 1);
+      const controller = new AbortController();
+      chatAbortRef.current = controller;
+      setChatPending(true);
+      setChatPendingMessage(content);
+      setChatError(null);
+
+      try {
+        const result = await chatAboutFinding(scanId, findingId, content, chatMessages.slice(-8), {
+          signal: controller.signal,
+        });
+        if (requestSeq !== chatRequestSeqRef.current) return;
+        setChatMessages((messages) => [
+          ...messages,
+          { role: 'user', content },
+          { role: 'assistant', content: result.answer },
+        ]);
+        setChatInput((current) => (current === content ? '' : current));
+        setChatPendingMessage('');
+      } catch (error) {
+        if (requestSeq !== chatRequestSeqRef.current || error?.code === 'cancelled') return;
+        setChatError(error);
+        setChatPendingMessage('');
+      } finally {
+        if (requestSeq === chatRequestSeqRef.current) {
+          chatInFlightRef.current = false;
+          setChatPending(false);
+        }
+      }
+    },
+    [chatInput, chatMessages, scanId, findingId],
+  );
 
   // ── Ask the backend for the explanation ───────────────────────────────────
   const generate = useCallback(
@@ -274,6 +332,9 @@ const AIExplanationOverlay = ({
     () => () => {
       detailAbortRef.current?.abort();
       explainAbortRef.current?.abort();
+      chatAbortRef.current?.abort();
+      chatRequestSeqRef.current += 1;
+      chatInFlightRef.current = false;
     },
     [],
   );
@@ -377,6 +438,7 @@ const AIExplanationOverlay = ({
     Boolean(scanId && findingId) &&
     targetExplanationState !== 'thinking' &&
     targetExplanationState !== 'generating';
+  const canChat = detailStatus === 'ready' && Boolean(finding) && !chatPending;
 
   return (
     <div
@@ -831,6 +893,151 @@ const AIExplanationOverlay = ({
                   </div>
                 </div>
               )}
+
+              {detailStatus === 'ready' && finding ? (
+                <section
+                  aria-labelledby="finding-chat-title"
+                  className="rounded-xl border border-border bg-muted/10 overflow-hidden"
+                >
+                  <button
+                    type="button"
+                    aria-expanded={chatExpanded}
+                    aria-controls="finding-chat-content"
+                    onClick={() => setChatExpanded((expanded) => !expanded)}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <Icon name="MessageCircle" size={18} className="text-primary flex-shrink-0" aria-hidden="true" />
+                      <span className="min-w-0">
+                        <span
+                          id="finding-chat-title"
+                          className="block text-sm font-heading font-semibold text-foreground"
+                        >
+                          Ask about this finding
+                        </span>
+                        <span className="block text-xs text-muted-foreground mt-1">
+                          {chatMessages.length
+                            ? `${chatMessages.length / 2} ${chatMessages.length === 2 ? 'reply' : 'replies'} · Follow up on impact, code, or remediation`
+                            : 'Expand to ask about impact, code context, or remediation'}
+                        </span>
+                      </span>
+                    </span>
+                    <Icon
+                      name={chatExpanded ? 'ChevronUp' : 'ChevronDown'}
+                      size={18}
+                      className="text-muted-foreground flex-shrink-0"
+                      aria-hidden="true"
+                    />
+                  </button>
+
+                  {chatExpanded ? (
+                    <div id="finding-chat-content" className="border-t border-border">
+                      <div
+                        className="max-h-72 overflow-y-auto p-4 space-y-3"
+                        aria-live="polite"
+                        aria-label="Conversation about this finding"
+                      >
+                        {!chatMessages.length && !chatPendingMessage ? (
+                          <div className="flex flex-wrap gap-2">
+                            {[
+                              'Explain the impact in plain language',
+                              'How can I fix this safely?',
+                              'What should I test after the fix?',
+                            ].map((question) => (
+                              <button
+                                key={question}
+                                type="button"
+                                onClick={() => sendChatMessage(question)}
+                                disabled={!canChat}
+                                className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground hover:border-primary/50 hover:text-primary disabled:opacity-50"
+                              >
+                                {question}
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {chatMessages.map((message, index) => (
+                          <div
+                            key={`${message.role}-${index}`}
+                            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                          >
+                            <div
+                              className={`max-w-[90%] rounded-lg px-3 py-2 text-sm ${
+                                message.role === 'user'
+                                  ? 'bg-primary text-primary-foreground'
+                                  : 'bg-card border border-border text-foreground'
+                              }`}
+                            >
+                              {message.role === 'assistant' ? (
+                                <Markdown content={message.content} className="!text-sm" />
+                              ) : (
+                                <p className="whitespace-pre-wrap">{message.content}</p>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+
+                        {chatPendingMessage ? (
+                          <div className="flex justify-end" role="status">
+                            <div className="max-w-[90%] rounded-lg bg-primary/80 px-3 py-2 text-sm text-primary-foreground">
+                              {chatPendingMessage}
+                              <span className="ml-2 opacity-75">Thinking…</span>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {chatError ? (
+                        <p className="mx-4 mb-3 text-xs text-error" role="alert">
+                          {chatError.message ||
+                            ERROR_HINTS[chatError.code] ||
+                            'The assistant could not answer. Please try again.'}
+                        </p>
+                      ) : null}
+
+                      <form
+                        className="border-t border-border p-3 flex items-end gap-2"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          sendChatMessage();
+                        }}
+                      >
+                        <label className="sr-only" htmlFor="finding-chat-input">
+                          Ask a question about this finding
+                        </label>
+                        <textarea
+                          id="finding-chat-input"
+                          rows={2}
+                          maxLength={2000}
+                          value={chatInput}
+                          onChange={(event) => setChatInput(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' && !event.shiftKey) {
+                              event.preventDefault();
+                              sendChatMessage();
+                            }
+                          }}
+                          placeholder="Ask a follow-up question…"
+                          disabled={chatPending}
+                          className="min-h-[2.75rem] max-h-32 flex-1 resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-60"
+                        />
+                        <Button
+                          type="submit"
+                          iconName="Send"
+                          aria-label="Send question"
+                          disabled={!canChat || !chatInput.trim()}
+                        >
+                          Send
+                        </Button>
+                      </form>
+                      <p className="px-4 pb-3 text-[11px] text-muted-foreground">
+                        This conversation is temporary and only uses this finding and its code excerpt.
+                      </p>
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
             </section>
           </div>
         </div>

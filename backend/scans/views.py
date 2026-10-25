@@ -20,7 +20,11 @@ from .services.worker_launcher import ensure_worker_running
 from .services.dashboard_overview import DashboardOverviewService
 from .services.findings import find_finding, public_finding
 from .services.source_context import extract_source_context
-from .services.ai_explanation import generate_explanation, stream_explanation
+from .services.ai_explanation import (
+    chat_about_finding,
+    generate_explanation,
+    stream_explanation,
+)
 from .services.ai_provider import AIProviderError, AIProviderRateLimitError
 
 import json
@@ -489,3 +493,77 @@ class FindingExplanationView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class FindingChatView(APIView):
+    """Answer a follow-up question grounded in one owned scan finding."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, finding_id):
+        scan = get_object_or_404(Scan, pk=pk, project__owner=request.user)
+        if not isinstance(request.data, dict):
+            return Response(
+                {'error': 'A JSON object is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        finding = _resolve_finding(scan, finding_id, request.data.get('finding_id'))
+        if not finding:
+            return Response(
+                {'error': 'Finding not found in this scan.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        message = request.data.get('message')
+        history = request.data.get('history', [])
+        if not isinstance(message, str) or not message.strip() or len(message) > 2000:
+            return Response(
+                {'error': 'message must contain 1 to 2000 characters.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not isinstance(history, list) or len(history) > 8:
+            return Response(
+                {'error': 'history must contain no more than 8 messages.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        for item in history:
+            if (
+                not isinstance(item, dict)
+                or item.get('role') not in ('user', 'assistant')
+                or not isinstance(item.get('content'), str)
+                or not item['content'].strip()
+                or len(item['content']) > 2000
+            ):
+                return Response(
+                    {'error': 'history messages must have a valid role and 1 to 2000 characters.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        source_context = extract_source_context(
+            scan.project, finding.get('file'),
+            finding.get('line'), finding.get('end_line'),
+        )
+
+        try:
+            result = chat_about_finding(
+                public_finding(finding),
+                source_context,
+                history,
+                message.strip(),
+            )
+        except AIProviderRateLimitError as exc:
+            payload = {'error': exc.message, 'code': exc.code, 'retryable': True}
+            if exc.retry_after:
+                payload['retry_after'] = exc.retry_after
+            return Response(payload, status=exc.status_code)
+        except AIProviderError as exc:
+            logger.warning(
+                'AI finding chat failed for scan %s finding %s: %s',
+                scan.pk, finding.get('id'), exc.code,
+            )
+            return Response(
+                {'error': exc.message, 'code': exc.code, 'retryable': exc.retryable},
+                status=exc.status_code,
+            )
+
+        return Response(result, status=status.HTTP_200_OK)

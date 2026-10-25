@@ -5,9 +5,10 @@
  * data together with the explanation, so this module never invents metadata:
  * it only moves payloads between the API and the UI.
  *
- * Two endpoints are used:
+ * These endpoints are used:
  *   GET  /api/scans/<scanId>/findings/<findingId>/           → finding + source
  *   POST /api/scans/<scanId>/findings/<findingId>/explain/   → AI explanation
+ *   POST /api/scans/<scanId>/findings/<findingId>/chat/      → contextual follow-up answer
  *
  * Explanations are cached in memory for the lifetime of the tab so that
  * re-opening the modal for the same finding does not spend provider quota
@@ -206,6 +207,33 @@ export const requestExplanation = async (scanId, findingId, options = {}) => {
   }
 };
 
+/** Send a follow-up question with the prior turns for the selected finding. */
+export const chatAboutFinding = async (scanId, findingId, message, history = [], options = {}) => {
+  if (!scanId || !findingId) {
+    throw new AiExplanationError(
+      'A scan and a finding must be selected before starting a chat.',
+      { code: 'missing_identifiers', retryable: false },
+    );
+  }
+
+  try {
+    const { data } = await api.post(
+      `/api/scans/${encodeURIComponent(scanId)}/findings/${encodeFindingId(findingId)}/chat/`,
+      { finding_id: findingId, message, history },
+      { signal: options.signal },
+    );
+    if (typeof data?.answer !== 'string' || !data.answer.trim()) {
+      throw new AiExplanationError('The assistant returned an empty answer.', {
+        code: 'ai_invalid_response',
+        retryable: true,
+      });
+    }
+    return data;
+  } catch (error) {
+    throw normalizeError(error);
+  }
+};
+
 const streamUrl = (scanId, findingId) => {
   const baseUrl = String(api.defaults.baseURL || '').replace(/\/+$/, '');
   return `${baseUrl}/api/scans/${encodeURIComponent(scanId)}/findings/${encodeFindingId(
@@ -389,5 +417,6 @@ export default {
   normalizeError,
   getFindingDetail,
   requestExplanation,
+  chatAboutFinding,
   streamExplanation,
 };

@@ -10,6 +10,7 @@ from .views import (
     DashboardOverviewView,
     FindingDetailView,
     FindingExplanationView,
+    FindingChatView,
 )
 from django.urls import path, re_path
 
@@ -28,8 +29,13 @@ urlpatterns = [
     path('<int:pk>/dismiss/', DismissFindingView.as_view(), name='scan-dismiss'),
     # The finding id may contain a "/" (npm package names such as
     # "dep_@babel/core"), so it is captured with a non-greedy pattern.  The
-    # explain route is declared first so that ".../explain/" is never swallowed
+    # explain and chat routes are declared first so that their suffixes are never swallowed
     # by the plain finding route.
+    re_path(
+        r'^(?P<pk>\d+)/findings/(?P<finding_id>.+?)/chat/$',
+        FindingChatView.as_view(),
+        name='finding-chat',
+    ),
     re_path(
         r'^(?P<pk>\d+)/findings/(?P<finding_id>.+?)/explain/$',
         FindingExplanationView.as_view(),
