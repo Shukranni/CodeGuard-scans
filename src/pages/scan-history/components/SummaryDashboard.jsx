@@ -10,6 +10,7 @@ const SummaryDashboard = ({ summaryData }) => {
   };
 
   const vulnerabilityDistribution = [
+    { name: 'Critical', value: summaryData?.totalVulnerabilities?.critical, color: '#7f1d1d' },
     { name: 'High', value: summaryData?.totalVulnerabilities?.high, color: COLORS?.high },
     { name: 'Medium', value: summaryData?.totalVulnerabilities?.medium, color: COLORS?.medium },
     { name: 'Low', value: summaryData?.totalVulnerabilities?.low, color: COLORS?.low }
@@ -62,9 +63,7 @@ const SummaryDashboard = ({ summaryData }) => {
             <Icon name="Clock" size={20} className="text-warning" />
           </div>
           <p className="text-3xl font-bold text-foreground">{summaryData?.avgScanTime}</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {summaryData?.scanTimeImprovement} faster
-          </p>
+          <p className="text-xs text-muted-foreground mt-1">Completed scans only</p>
         </div>
 
         <div className="bg-muted rounded-lg p-4">
@@ -73,9 +72,7 @@ const SummaryDashboard = ({ summaryData }) => {
             <Icon name="AlertTriangle" size={20} className="text-error" />
           </div>
           <p className="text-3xl font-bold text-foreground">{summaryData?.totalIssuesFound}</p>
-          <p className="text-xs text-muted-foreground mt-1">
-            {summaryData?.issuesTrend}
-          </p>
+          <p className="text-xs text-muted-foreground mt-1">Across all scans</p>
         </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

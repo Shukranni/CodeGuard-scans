@@ -3,6 +3,7 @@
  * Automatically attaches the JWT access token and handles 401 token refresh.
  */
 import axios from 'axios';
+import { notifyApiError } from '../utils/notifications';
 
 const RAW_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
 
@@ -85,9 +86,18 @@ api.interceptors.response.use(
         localStorage.removeItem('access_token');
         localStorage.removeItem('refresh_token');
         window.dispatchEvent(new Event('auth:logout'));
+        notifyApiError(refreshError, 'Your session has expired. Please sign in again.');
         return Promise.reject(refreshError);
       } finally {
         isRefreshing = false;
+      }
+    }
+
+    if (originalRequest?._silentError !== true) {
+      const status = error?.response?.status;
+      const isExpected = status === 401 || status === 403 || status === 404 || status === 409 || status === 413 || status === 429;
+      if (!error?.response || status >= 500 || !isExpected) {
+        notifyApiError(error, 'Something went wrong. Please try again.');
       }
     }
 

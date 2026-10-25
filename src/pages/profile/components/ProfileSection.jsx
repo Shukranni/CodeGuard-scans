@@ -10,6 +10,7 @@ import Icon from '../../../components/AppIcon';
 import Button from '../../../components/ui/Button';
 import Input from '../../../components/ui/Input';
 import { useAuth } from '../../../context/AuthContext';
+import { useNotification } from '../../../context/NotificationContext';
 import { updateMe } from '../../../services/authService';
 
 // ── Avatar ────────────────────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ const Avatar = ({ firstName, lastName, email, size = 'lg' }) => {
 // ── Section ───────────────────────────────────────────────────────────────────
 const ProfileSection = () => {
   const { user, updateUser } = useAuth();
+  const { success, error } = useNotification();
 
   const [firstName, setFirstName] = useState('');
   const [lastName,  setLastName]  = useState('');
@@ -75,6 +77,7 @@ const ProfileSection = () => {
       });
       updateUser(data);
       setFeedback({ type: 'success', msg: 'Profile updated successfully.' });
+      success('Profile updated', 'Your account details were saved successfully.');
     } catch (err) {
       const detail = err?.response?.data;
       if (detail && typeof detail === 'object') {
@@ -82,6 +85,7 @@ const ProfileSection = () => {
       } else {
         setFeedback({ type: 'error', msg: 'Failed to save changes. Please try again.' });
       }
+      error('Unable to update profile', 'Your profile changes could not be saved. Please try again.');
     } finally {
       setSaving(false);
     }

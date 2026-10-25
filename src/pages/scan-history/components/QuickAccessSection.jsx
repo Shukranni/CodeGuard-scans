@@ -69,9 +69,9 @@ const QuickAccessSection = ({ recentScans, frequentProjects, onViewScan, onStart
         <div className="space-y-3">
           {frequentProjects?.map((project) => (
             <div
-              key={project?.id}
+              key={project?.projectId || project?.name}
               className="flex items-center justify-between p-3 bg-muted rounded-lg hover:bg-muted/80 transition-colors cursor-pointer"
-              onClick={() => onStartNewScan(project?.name)}
+              onClick={() => onStartNewScan(project?.projectId, project?.name, project?.validation)}
             >
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-foreground truncate">
@@ -92,7 +92,7 @@ const QuickAccessSection = ({ recentScans, frequentProjects, onViewScan, onStart
                 size="sm"
                 onClick={(e) => {
                   e?.stopPropagation();
-                  onStartNewScan(project?.name);
+                  onStartNewScan(project?.projectId, project?.name, project?.validation);
                 }}
                 iconName="RefreshCw"
               >

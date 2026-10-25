@@ -6,7 +6,7 @@
  * the button is disabled while a request is in flight.
  */
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import AppShell from '../../components/layout/AppShell';
 import PageHeader from '../../components/layout/PageHeader';
 import Icon from '../../components/AppIcon';
@@ -19,6 +19,7 @@ import AdvancedOptions from './components/AdvancedOptions';
 import ScanSummary from './components/ScanSummary';
 import api from '../../utils/api';
 import { useScanProgress } from '../../context/ScanProgressContext';
+import { useNotification } from '../../context/NotificationContext';
 import { cn } from '../../utils/cn';
 
 const STEPS = [
@@ -29,14 +30,24 @@ const STEPS = [
 
 const NewScanSetup = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const existingProject = location.state?.projectId
+    ? {
+        id: location.state.projectId,
+        projectName: location.state.projectName || 'Previously uploaded project',
+        ...(location.state.validation || {}),
+        isValid: true,
+      }
+    : null;
   const { initiateScan } = useScanProgress();
-  const [currentStep, setCurrentStep] = useState(1);
+  const { success, error, info, warning } = useNotification();
+  const [currentStep, setCurrentStep] = useState(existingProject ? 2 : 1);
   // Guards against double-submitting the scan creation request.
   const [isStarting, setIsStarting] = useState(false);
   const [startError, setStartError] = useState(null);
 
   const [configuration, setConfiguration] = useState({
-    sourceType: null,
+    sourceType: existingProject ? 'existing' : null,
     file: null,
     repository: null,
     selectedScanners: ['semgrep', 'gitleaks', 'dependency'],
@@ -46,7 +57,7 @@ const NewScanSetup = () => {
       owaspCategories: ['a01', 'a02', 'a03', 'a05', 'a06', 'a07'],
       verboseLogging: false,
     },
-    validationData: null,
+    validationData: existingProject,
   });
 
   useEffect(() => {
@@ -122,15 +133,18 @@ const NewScanSetup = () => {
     const projectId = configuration?.validationData?.id || configuration?.repository?.projectId;
     if (!projectId) {
       setStartError('Project ID not found. Please re-upload your project.');
+      warning('Missing project', 'Project ID not found. Please re-upload your project.');
       return;
     }
     if (!configuration?.selectedScanners?.length) {
       setStartError('Select at least one scanner before starting the scan.');
+      warning('No scanners selected', 'Select at least one scanner before starting the scan.');
       return;
     }
 
     setStartError(null);
     setIsStarting(true);
+    info('Starting scan', 'Your project is being queued for analysis.');
 
     try {
       const response = await api.post('/api/scans/start/', {
@@ -154,11 +168,14 @@ const NewScanSetup = () => {
         },
       });
 
+      success('Scan started', 'Your project has been queued for scanning.');
       // The scan was accepted and queued — move to the live progress page.
       navigate('/scan-progress', { state: { scanId } });
     } catch (error) {
       setIsStarting(false);
-      setStartError(describeStartError(error));
+      const message = describeStartError(error);
+      setStartError(message);
+      error('Unable to start scan', message);
     }
   };
 

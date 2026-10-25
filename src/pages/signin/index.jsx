@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { useNotification } from '../../context/NotificationContext';
 import Icon from '../../components/AppIcon';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -9,6 +10,7 @@ const SignIn = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { signIn } = useAuth();
+  const { success, error } = useNotification();
 
   const from = location.state?.from?.pathname || '/dashboard';
 
@@ -51,6 +53,7 @@ const SignIn = () => {
     setApiError('');
     try {
       await signIn(formData.email, formData.password);
+      success('Sign in successful', 'Welcome back. Your workspace is ready.');
       navigate(from, { replace: true });
     } catch (err) {
       const detail =

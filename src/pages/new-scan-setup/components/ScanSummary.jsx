@@ -43,7 +43,10 @@ const ScanSummary = ({ configuration }) => {
   const validation = configuration?.validationData || {};
   const languages = Array.isArray(validation.languages) ? validation.languages : [];
   const isRepository = configuration?.sourceType === 'github';
-  const sourceLabel = isRepository ? 'GitHub repository' : 'ZIP archive';
+  const isExistingProject = configuration?.sourceType === 'existing';
+  const sourceLabel = isExistingProject
+    ? 'Previously uploaded project'
+    : isRepository ? 'GitHub repository' : 'ZIP archive';
   const repositoryLabel = isRepository
     ? (configuration?.repository?.url || validation?.projectName || validation?.name || '—')
     : null;

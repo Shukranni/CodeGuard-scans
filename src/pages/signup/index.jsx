@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { useNotification } from '../../context/NotificationContext';
 import Icon from '../../components/AppIcon';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
@@ -8,6 +9,7 @@ import Input from '../../components/ui/Input';
 const SignUp = () => {
   const navigate = useNavigate();
   const { signUp } = useAuth();
+  const { success, error } = useNotification();
 
   const [formData, setFormData] = useState({
     first_name: '',
@@ -96,6 +98,7 @@ const SignUp = () => {
     setApiError('');
     try {
       await signUp(formData);
+      success('Account created', 'Your account is ready. You are now signed in.');
       navigate('/dashboard', { replace: true });
     } catch (err) {
       if (err.response?.data) {
@@ -105,8 +108,10 @@ const SignUp = () => {
         if (!general && Object.keys(fieldErrors).length === 0) {
           setApiError('Registration failed. Please try again.');
         }
+        error('Account creation failed', general || 'Registration failed. Please try again.');
       } else {
         setApiError('Registration failed. Please check your connection and try again.');
+        error('Account creation failed', 'Registration failed. Please check your connection and try again.');
       }
     } finally {
       setIsSubmitting(false);

@@ -3,14 +3,17 @@ import Routes from "./Routes";
 import { ScanProgressProvider } from "./context/ScanProgressContext";
 import { AuthProvider } from "./context/AuthContext";
 import { ThemeProvider } from "./context/ThemeContext";
+import { NotificationProvider } from "./context/NotificationContext";
 
 function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <ScanProgressProvider>
-          <Routes />
-        </ScanProgressProvider>
+        <NotificationProvider>
+          <ScanProgressProvider>
+            <Routes />
+          </ScanProgressProvider>
+        </NotificationProvider>
       </AuthProvider>
     </ThemeProvider>
   );

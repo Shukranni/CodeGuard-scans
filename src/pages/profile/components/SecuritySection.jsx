@@ -13,6 +13,7 @@ import React, { useState } from 'react';
 import Icon from '../../../components/AppIcon';
 import Button from '../../../components/ui/Button';
 import { useAuth } from '../../../context/AuthContext';
+import { useNotification } from '../../../context/NotificationContext';
 import { changePassword } from '../../../services/authService';
 import { useNavigate } from 'react-router-dom';
 
@@ -58,6 +59,7 @@ const PasswordField = ({ id, label, value, onChange, error, autoComplete, placeh
 // ── Main section ──────────────────────────────────────────────────────────────
 const SecuritySection = () => {
   const { signOut, replaceTokens } = useAuth();
+  const { success, error } = useNotification();
   const navigate = useNavigate();
 
   const [form, setForm] = useState({
@@ -101,6 +103,7 @@ const SecuritySection = () => {
       replaceTokens({ access: data.access, refresh: data.refresh });
       setForm({ current_password: '', new_password: '', confirm_password: '' });
       setFeedback({ type: 'success', msg: 'Password changed successfully.' });
+      success('Password updated', 'Your password was changed successfully.');
     } catch (err) {
       const detail = err?.response?.data;
       if (detail && typeof detail === 'object') {
@@ -108,6 +111,7 @@ const SecuritySection = () => {
       } else {
         setFeedback({ type: 'error', msg: 'Failed to change password. Please try again.' });
       }
+      error('Password update failed', 'Your password could not be changed. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -117,7 +121,10 @@ const SecuritySection = () => {
     setSigningOut(true);
     try {
       await signOut();
+      success('Signed out', 'You have been signed out successfully.');
       navigate('/signin', { replace: true });
+    } catch (err) {
+      error('Sign out failed', 'We could not sign you out cleanly. Please try again.');
     } finally {
       setSigningOut(false);
     }

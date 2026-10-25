@@ -22,7 +22,7 @@ const BulkActionsBar = ({ selectedCount, onCompare, onExport, onDelete, onClearS
             onClick={onCompare}
             iconName="GitCompare"
             iconPosition="left"
-            disabled={selectedCount < 2}
+            disabled={selectedCount !== 2}
           >
             Compare
           </Button>

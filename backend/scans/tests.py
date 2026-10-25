@@ -348,6 +348,57 @@ class ScanCreationTests(ScanTestEnvironment, AuthMixin, APITestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Scan detail deletion
+# ─────────────────────────────────────────────────────────────────────────────
+
+class ScanDetailDeleteTests(ScanTestEnvironment, AuthMixin, APITestCase):
+    def test_owner_can_delete_scan(self):
+        owner = self.make_user()
+        self.login(owner)
+        project = self.make_project(owner)
+        scan = Scan.objects.create(project=project, status='completed')
+
+        response = self.client.delete(f'/api/scans/{scan.pk}/')
+
+        self.assertEqual(response.status_code, http_status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Scan.objects.filter(pk=scan.pk).exists())
+        self.assertTrue(Project.objects.filter(pk=project.pk).exists())
+
+    def test_foreign_scan_cannot_be_deleted(self):
+        owner = self.make_user()
+        intruder = self.make_user()
+        project = self.make_project(owner)
+        scan = Scan.objects.create(project=project, status='completed')
+        self.login(intruder)
+
+        response = self.client.delete(f'/api/scans/{scan.pk}/')
+
+        self.assertEqual(response.status_code, http_status.HTTP_404_NOT_FOUND)
+        self.assertTrue(Scan.objects.filter(pk=scan.pk).exists())
+
+    def test_active_scan_cannot_be_deleted(self):
+        owner = self.make_user()
+        self.login(owner)
+        project = self.make_project(owner)
+        scan = Scan.objects.create(project=project, status='running')
+
+        response = self.client.delete(f'/api/scans/{scan.pk}/')
+
+        self.assertEqual(response.status_code, http_status.HTTP_409_CONFLICT)
+        self.assertTrue(Scan.objects.filter(pk=scan.pk).exists())
+
+    def test_unauthenticated_delete_is_rejected(self):
+        owner = self.make_user()
+        project = self.make_project(owner)
+        scan = Scan.objects.create(project=project, status='completed')
+
+        response = self.client.delete(f'/api/scans/{scan.pk}/')
+
+        self.assertEqual(response.status_code, http_status.HTTP_401_UNAUTHORIZED)
+        self.assertTrue(Scan.objects.filter(pk=scan.pk).exists())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Status endpoint (frontend polling target)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -2469,4 +2520,3 @@ class ScannerRunnerProjectPassthroughTests(SimpleTestCase):
 
         self.assertIsNone(captured['semgrep_project'])
         self.assertEqual(classify_scan_result(results['semgrep']), 'ok')
-

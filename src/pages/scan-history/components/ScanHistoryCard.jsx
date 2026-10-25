@@ -21,10 +21,15 @@ const ScanHistoryCard = ({ scan, onViewResults, onRerun, onDownload, onDelete, o
   const getStatusColor = (status) => {
     switch (status?.toLowerCase()) {
       case 'completed':
+      case 'resolved':
         return 'bg-success/10 text-success';
       case 'failed':
         return 'bg-error/10 text-error';
-      case 'in-progress':
+      case 'queued':
+      case 'pending':
+      case 'preparing':
+      case 'running':
+      case 'completed with warnings':
         return 'bg-warning/10 text-warning';
       default:
         return 'bg-muted text-muted-foreground';
@@ -33,6 +38,7 @@ const ScanHistoryCard = ({ scan, onViewResults, onRerun, onDownload, onDelete, o
 
   const formatDate = (dateString) => {
     const date = new Date(dateString);
+    if (!Number.isFinite(date.getTime())) return 'Date unavailable';
     return date?.toLocaleDateString('en-US', { 
       month: 'short', 
       day: 'numeric', 
@@ -43,6 +49,7 @@ const ScanHistoryCard = ({ scan, onViewResults, onRerun, onDownload, onDelete, o
   };
 
   const formatDuration = (seconds) => {
+    if (!Number.isFinite(seconds)) return 'Not finished';
     if (seconds < 60) return `${seconds}s`;
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = seconds % 60;
@@ -89,23 +96,29 @@ const ScanHistoryCard = ({ scan, onViewResults, onRerun, onDownload, onDelete, o
             </span>
           </div>
 
-          <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-error"></div>
               <span className={`text-sm font-medium ${getSeverityColor('high')}`}>
-                {scan?.vulnerabilities?.high} High
+                {scan?.vulnerabilities?.critical || 0} Critical
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-error"></div>
+              <span className={`text-sm font-medium ${getSeverityColor('high')}`}>
+                {scan?.vulnerabilities?.high || 0} High
               </span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-warning"></div>
               <span className={`text-sm font-medium ${getSeverityColor('medium')}`}>
-                {scan?.vulnerabilities?.medium} Medium
+                {scan?.vulnerabilities?.medium || 0} Medium
               </span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-success"></div>
               <span className={`text-sm font-medium ${getSeverityColor('low')}`}>
-                {scan?.vulnerabilities?.low} Low
+                {scan?.vulnerabilities?.low || 0} Low
               </span>
             </div>
           </div>
@@ -125,7 +138,7 @@ const ScanHistoryCard = ({ scan, onViewResults, onRerun, onDownload, onDelete, o
                   <div className="mt-1 space-y-1">
                     {scan?.scannerVersions?.map((scanner, index) => (
                       <div key={index} className="text-foreground">
-                        {scanner?.name}: v{scanner?.version}
+                        {scanner?.version ? `${scanner.name}: v${scanner.version}` : scanner?.name}
                       </div>
                     ))}
                   </div>
@@ -145,7 +158,7 @@ const ScanHistoryCard = ({ scan, onViewResults, onRerun, onDownload, onDelete, o
                   </div>
                   <div className="flex items-center justify-between p-2 bg-muted rounded">
                     <span className="text-sm">Critical Files</span>
-                    <span className="font-semibold">{scan?.criticalFiles}</span>
+                    <span className="font-semibold">{scan?.criticalFiles ?? 'N/A'}</span>
                   </div>
                 </div>
               </div>
@@ -197,6 +210,10 @@ const ScanHistoryCard = ({ scan, onViewResults, onRerun, onDownload, onDelete, o
               variant="ghost"
               size="sm"
               onClick={() => onDelete(scan?.id)}
+              disabled={['pending', 'queued', 'preparing', 'running'].includes(scan?.statusKey)}
+              title={['pending', 'queued', 'preparing', 'running'].includes(scan?.statusKey)
+                ? 'Wait for the scan to finish before deleting it'
+                : undefined}
               iconName="Trash2"
               iconPosition="left"
               className="text-error hover:text-error ml-auto"

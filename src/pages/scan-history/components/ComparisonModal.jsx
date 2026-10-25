@@ -20,6 +20,7 @@ const ComparisonModal = ({ isOpen, onClose, scans }) => {
 
   const formatDate = (dateString) => {
     const date = new Date(dateString);
+    if (!Number.isFinite(date.getTime())) return 'Date unavailable';
     return date?.toLocaleDateString('en-US', { 
       month: 'short', 
       day: 'numeric', 
@@ -54,11 +55,17 @@ const ComparisonModal = ({ isOpen, onClose, scans }) => {
                   <p className="text-sm text-muted-foreground mb-2">Vulnerabilities</p>
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
+                      <span className={`text-sm font-medium ${getSeverityColor('high')}`}>Critical</span>
+                      <span className="text-sm font-bold text-foreground">
+                        {scan?.vulnerabilities?.critical || 0}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
                       <span className={`text-sm font-medium ${getSeverityColor('high')}`}>
                         High
                       </span>
                       <span className="text-sm font-bold text-foreground">
-                        {scan?.vulnerabilities?.high}
+                        {scan?.vulnerabilities?.high || 0}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
@@ -66,7 +73,7 @@ const ComparisonModal = ({ isOpen, onClose, scans }) => {
                         Medium
                       </span>
                       <span className="text-sm font-bold text-foreground">
-                        {scan?.vulnerabilities?.medium}
+                        {scan?.vulnerabilities?.medium || 0}
                       </span>
                     </div>
                     <div className="flex items-center justify-between">
@@ -74,7 +81,7 @@ const ComparisonModal = ({ isOpen, onClose, scans }) => {
                         Low
                       </span>
                       <span className="text-sm font-bold text-foreground">
-                        {scan?.vulnerabilities?.low}
+                        {scan?.vulnerabilities?.low || 0}
                       </span>
                     </div>
                   </div>
@@ -92,7 +99,7 @@ const ComparisonModal = ({ isOpen, onClose, scans }) => {
 
                 <div>
                   <p className="text-sm text-muted-foreground mb-1">Scan Duration</p>
-                  <p className="text-sm font-medium text-foreground">{scan?.duration}s</p>
+                  <p className="text-sm font-medium text-foreground">{scan?.duration == null ? 'Not finished' : `${scan.duration}s`}</p>
                 </div>
               </div>
             </div>
@@ -106,15 +113,20 @@ const ComparisonModal = ({ isOpen, onClose, scans }) => {
           </h4>
           
           <div className="space-y-2">
-            {scans?.[0]?.vulnerabilities?.high !== scans?.[1]?.vulnerabilities?.high && (
-              <div className="flex items-center justify-between p-2 bg-muted rounded">
-                <span className="text-sm text-muted-foreground">High Severity Change</span>
-                <span className={`text-sm font-medium ${scans?.[1]?.vulnerabilities?.high > scans?.[0]?.vulnerabilities?.high ? 'text-error' : 'text-success'}`}>
-                  {scans?.[1]?.vulnerabilities?.high > scans?.[0]?.vulnerabilities?.high ? '+' : ''}
-                  {scans?.[1]?.vulnerabilities?.high - scans?.[0]?.vulnerabilities?.high}
-                </span>
-              </div>
-            )}
+            {['critical', 'high', 'medium', 'low'].map((severity) => {
+              const change = (scans?.[1]?.vulnerabilities?.[severity] || 0)
+                - (scans?.[0]?.vulnerabilities?.[severity] || 0);
+              return change === 0 ? null : (
+                <div key={severity} className="flex items-center justify-between p-2 bg-muted rounded">
+                  <span className="text-sm text-muted-foreground">
+                    {severity.charAt(0).toUpperCase() + severity.slice(1)} Severity Change
+                  </span>
+                  <span className={`text-sm font-medium ${change > 0 ? 'text-error' : 'text-success'}`}>
+                    {change > 0 ? '+' : ''}{change}
+                  </span>
+                </div>
+              );
+            })}
 
             {scans?.[0]?.totalIssues !== scans?.[1]?.totalIssues && (
               <div className="flex items-center justify-between p-2 bg-muted rounded">
@@ -129,7 +141,9 @@ const ComparisonModal = ({ isOpen, onClose, scans }) => {
             <div className="flex items-center justify-between p-2 bg-muted rounded">
               <span className="text-sm text-muted-foreground">Time Difference</span>
               <span className="text-sm font-medium text-foreground">
-                {Math.abs(scans?.[1]?.duration - scans?.[0]?.duration)}s
+                {scans?.[0]?.duration == null || scans?.[1]?.duration == null
+                  ? 'N/A'
+                  : `${Math.abs(scans[1].duration - scans[0].duration)}s`}
               </span>
             </div>
           </div>

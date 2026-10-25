@@ -5,7 +5,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.generics import ListAPIView, RetrieveAPIView
+from rest_framework.generics import ListAPIView, RetrieveDestroyAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.utils import timezone
 
@@ -52,13 +52,23 @@ class ScanListView(ListAPIView):
         ).order_by('-started_at')
 
 
-class ScanDetailView(RetrieveAPIView):
-    """Return a single scan; 404 if it does not belong to the current user."""
+class ScanDetailView(RetrieveDestroyAPIView):
+    """Return or delete a scan; 404 if it does not belong to the current user."""
     serializer_class = ScanSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         return Scan.objects.filter(project__owner=self.request.user)
+
+    def destroy(self, request, *args, **kwargs):
+        scan = self.get_object()
+        if scan.status in Scan.ACTIVE_STATUSES:
+            return Response(
+                {'error': 'An active scan cannot be deleted until it finishes.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        self.perform_destroy(scan)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ScanStatusView(APIView):
