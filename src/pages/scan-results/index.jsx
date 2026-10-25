@@ -95,6 +95,37 @@ const OWASP_CATEGORIES = [
   'A10:2021 - Server-Side Request Forgery',
 ];
 
+const OWASP_BY_CWE = {
+  'CWE-22': 'A01:2021 - Broken Access Control',
+  'CWE-352': 'A01:2021 - Broken Access Control',
+  'CWE-862': 'A01:2021 - Broken Access Control',
+  'CWE-863': 'A01:2021 - Broken Access Control',
+  'CWE-295': 'A02:2021 - Cryptographic Failures',
+  'CWE-319': 'A02:2021 - Cryptographic Failures',
+  'CWE-327': 'A02:2021 - Cryptographic Failures',
+  'CWE-328': 'A02:2021 - Cryptographic Failures',
+  'CWE-338': 'A02:2021 - Cryptographic Failures',
+  'CWE-79': 'A03:2021 - Injection',
+  'CWE-89': 'A03:2021 - Injection',
+  'CWE-78': 'A03:2021 - Injection',
+  'CWE-94': 'A03:2021 - Injection',
+  'CWE-611': 'A05:2021 - Security Misconfiguration',
+  'CWE-502': 'A08:2021 - Software and Data Integrity Failures',
+  'CWE-829': 'A08:2021 - Software and Data Integrity Failures',
+  'CWE-918': 'A10:2021 - Server-Side Request Forgery',
+  'CWE-521': 'A07:2021 - Identification and Authentication Failures',
+  'CWE-522': 'A07:2021 - Identification and Authentication Failures',
+  'CWE-1104': 'A06:2021 - Vulnerable and Outdated Components',
+};
+
+const getOwasp = (metadata = {}) => {
+  const details = metadata || {};
+  const explicit = Array.isArray(details.owasp) ? details.owasp[0] : details.owasp;
+  if (explicit) return explicit;
+  const cwe = Array.isArray(details.cwe) ? details.cwe[0] : details.cwe;
+  return OWASP_BY_CWE[cwe] || 'N/A';
+};
+
 const ScanResults = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -189,7 +220,7 @@ const ScanResults = () => {
           endLine: f.end?.line,
           ruleId: f.check_id || null,
           language: f.path?.split('.')?.[f.path?.split('.')?.length - 1] || 'unknown',
-          owasp: f.extra?.metadata?.owasp?.[0] || 'N/A',
+          owasp: getOwasp(f.extra?.metadata),
           cwe: f.extra?.metadata?.cwe?.[0] || 'N/A',
           description: f.extra?.message || 'No description available',
           codeSnippet: f.extra?.lines || '',
@@ -216,12 +247,15 @@ const ScanResults = () => {
           endLine: f.EndLine,
           ruleId: f.RuleID || null,
           language: f.File?.split('.')?.[f.File?.split('.')?.length - 1] || 'unknown',
-          owasp: 'A02:2021',
+          owasp: 'A07:2021 - Identification and Authentication Failures',
           cwe: 'CWE-798',
-          description: `Hardcoded ${f.Description} detected in ${f.File}. These secrets should be moved to secure vaults or environment variables.`,
-          codeSnippet: f.Match || '',
+          description: `${f.Description || 'Credential'} detected in ${f.File || 'the project'} at line ${f.StartLine || 'unknown'}. The exposed value is committed in source control and should be treated as compromised.`,
+          codeSnippet: f.Secret && f.Match
+            ? f.Match.split(f.Secret).join('[REDACTED]')
+            : (f.Match || ''),
           remediation: 'Remove the hardcoded secret immediately. Revoke the credential and rotate it if it was previously pushed to a repository.',
-          fixCode: '// Use environment variables or a secret manager instead\nconst apiKey = process.env.API_KEY;',
+          fixCode: '// Load credentials from an environment variable or secret manager.',
+          references: [],
           isDismissed: dismissedIds.includes(`gitleaks_${idx}`),
         });
       });
@@ -239,15 +273,31 @@ const ScanResults = () => {
           confidence: 100,
           scanner: 'Dependency',
           file: 'package-lock.json',
-          line: null,
+          line: info.line || null,
           ruleId: pkg,
           language: 'npm',
-          owasp: 'A06:2021',
+          owasp: 'A06:2021 - Vulnerable and Outdated Components',
           cwe: 'CWE-1104',
-          description: `Package ${pkg} has security vulnerabilities. Summary: ${scannersData.dependency.summary || 'N/A'}`,
+          description: info.via
+            ?.filter((advisory) => advisory && typeof advisory === 'object')
+            .map((advisory) => advisory.title)
+            .filter(Boolean)
+            .join(' ')
+            || `Package ${pkg} has security vulnerabilities. Summary: ${scannersData.dependency.summary || 'N/A'}`,
           codeSnippet: `"package": "${pkg}", "version": "${info.range}"`,
           remediation: `Update ${pkg} to the latest secure version by running the following command in your terminal.`,
           fixCode: `npm update ${pkg}`,
+          advisories: (info.via || [])
+            .filter((advisory) => advisory && typeof advisory === 'object')
+            .map((advisory) => ({
+              title: advisory.title || 'Security advisory',
+              url: advisory.url || null,
+              severity: advisory.severity || null,
+              cwe: Array.isArray(advisory.cwe) ? advisory.cwe : advisory.cwe ? [advisory.cwe] : [],
+              cvssScore: advisory.cvss?.score ?? null,
+            })),
+          nodes: info.nodes || [],
+          fixAvailable: Boolean(info.fixAvailable),
           isDismissed: dismissedIds.includes(`dep_${pkg}`),
         });
       });

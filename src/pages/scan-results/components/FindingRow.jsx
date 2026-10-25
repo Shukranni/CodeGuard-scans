@@ -129,6 +129,48 @@ const FindingRow = ({ finding, onViewDetails, onDismiss, onOpenInExplorer }) => 
               </div>
             ) : null}
 
+            {finding?.advisories?.length ? (
+              <section>
+                <h4 className="text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                  Vulnerability advisories
+                </h4>
+                <ul className="mt-2 space-y-2">
+                  {finding.advisories.map((advisory, index) => (
+                    <li key={`${advisory.url || advisory.title}-${index}`} className="rounded-lg border border-border p-3">
+                      <p className="text-sm font-medium text-foreground">{advisory.title}</p>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        {advisory.severity ? <span>Severity: {advisory.severity}</span> : null}
+                        {advisory.cvssScore != null ? <span>CVSS: {advisory.cvssScore}</span> : null}
+                        {advisory.cwe?.length ? <span>CWE: {advisory.cwe.join(', ')}</span> : null}
+                        {advisory.url ? (
+                          <a className="text-primary underline" href={advisory.url} target="_blank" rel="noreferrer">
+                            Advisory details
+                          </a>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : null}
+
+            {finding?.nodes?.length ? (
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                  Affected package locations
+                </h4>
+                <ul className="mt-1.5 space-y-1 text-xs text-foreground">
+                  {finding.nodes.map((node) => <li key={node} className="font-data">{node}</li>)}
+                </ul>
+              </div>
+            ) : null}
+
+            {finding?.fixAvailable ? (
+              <p className="text-xs font-medium text-emerald-700">
+                npm reports that a fix is available for this dependency.
+              </p>
+            ) : null}
+
             <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap">
               <Button
                 variant="default"

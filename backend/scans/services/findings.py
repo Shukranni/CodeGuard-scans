@@ -102,6 +102,29 @@ _LANGUAGE_BY_EXTENSION = {
     '.svelte': 'Svelte', '.tf': 'Terraform', '.dockerfile': 'Dockerfile',
 }
 
+_OWASP_BY_CWE = {
+    'CWE-22': 'A01:2021 - Broken Access Control',
+    'CWE-352': 'A01:2021 - Broken Access Control',
+    'CWE-862': 'A01:2021 - Broken Access Control',
+    'CWE-863': 'A01:2021 - Broken Access Control',
+    'CWE-295': 'A02:2021 - Cryptographic Failures',
+    'CWE-319': 'A02:2021 - Cryptographic Failures',
+    'CWE-327': 'A02:2021 - Cryptographic Failures',
+    'CWE-328': 'A02:2021 - Cryptographic Failures',
+    'CWE-338': 'A02:2021 - Cryptographic Failures',
+    'CWE-522': 'A07:2021 - Identification and Authentication Failures',
+    'CWE-521': 'A07:2021 - Identification and Authentication Failures',
+    'CWE-79': 'A03:2021 - Injection',
+    'CWE-89': 'A03:2021 - Injection',
+    'CWE-78': 'A03:2021 - Injection',
+    'CWE-94': 'A03:2021 - Injection',
+    'CWE-611': 'A05:2021 - Security Misconfiguration',
+    'CWE-918': 'A10:2021 - Server-Side Request Forgery',
+    'CWE-502': 'A08:2021 - Software and Data Integrity Failures',
+    'CWE-829': 'A08:2021 - Software and Data Integrity Failures',
+    'CWE-1104': 'A06:2021 - Vulnerable and Outdated Components',
+}
+
 
 # ── Small text helpers ────────────────────────────────────────────────────────
 
@@ -144,6 +167,13 @@ def _as_list(value):
 def _first(value):
     items = _as_list(value)
     return items[0] if items else None
+
+
+def _semgrep_owasp(metadata):
+    explicit = _first(metadata.get('owasp'))
+    if explicit:
+        return explicit
+    return _OWASP_BY_CWE.get(_first(metadata.get('cwe')))
 
 
 def _references(metadata):
@@ -189,7 +219,7 @@ def _semgrep_findings(scanners_data, dismissed):
             'code_snippet': _clean_snippet(extra.get('lines')),
             'remediation': metadata.get('remediation') or None,
             'cwe': _first(metadata.get('cwe')),
-            'owasp': _first(metadata.get('owasp')),
+            'owasp': _semgrep_owasp(metadata),
             'rule_id': raw.get('check_id') or None,
             'language': language_from_path(file_path),
             'confidence': metadata.get('confidence') or None,
@@ -240,7 +270,7 @@ def _gitleaks_findings(scanners_data, dismissed):
                 'from an environment variable or a secret manager instead.'
             ),
             'cwe': 'CWE-798',
-            'owasp': 'A02:2021 - Cryptographic Failures',
+            'owasp': 'A07:2021 - Identification and Authentication Failures',
             'rule_id': raw.get('RuleID') or None,
             'language': language_from_path(file_path),
             'confidence': None,
@@ -287,7 +317,7 @@ def _dependency_findings(scanners_data, dismissed):
             'title': f'Vulnerable Dependency: {package} {version_range}'.strip(),
             'severity': severity,
             'file': 'package-lock.json',
-            'line': None,
+            'line': info.get('line'),
             'end_line': None,
             'description': (
                 f'The npm package "{package}" (installed range {version_range or "unknown"}) '
@@ -306,6 +336,7 @@ def _dependency_findings(scanners_data, dismissed):
             'references': [a['url'] for a in advisories if a.get('url')],
             'dismissed': finding_id in dismissed,
             'advisories': advisories,
+            'nodes': _as_list(info.get('nodes')),
             'fix_available': bool(info.get('fixAvailable')),
         })
     return findings

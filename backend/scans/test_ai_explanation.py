@@ -106,6 +106,8 @@ DEPENDENCY_RAW = {
             'cvss': {'score': 9.8},
         },
     ],
+    'nodes': ['node_modules/@babel/core'],
+    'line': 12,
     'fixAvailable': True,
 }
 
@@ -289,10 +291,13 @@ class FindingDetailEndpointTests(ExplanationTestBase):
         self.assertTrue(finding['secret_detected'])
         self.assertEqual(finding['line'], GITLEAKS_RAW['StartLine'])
         self.assertEqual(finding['end_line'], GITLEAKS_RAW['EndLine'])
+        self.assertEqual(finding['owasp'], 'A07:2021 - Identification and Authentication Failures')
+        self.assertEqual(finding['cwe'], 'CWE-798')
 
     def test_semgrep_placeholder_is_not_shown_as_code(self):
         res = self.client.get(self.detail_url('semgrep_1'))
         self.assertEqual(res.data['finding']['code_snippet'], '')
+        self.assertEqual(res.data['finding']['owasp'], 'A03:2021 - Injection')
 
     def test_unknown_finding_returns_404(self):
         res = self.client.get(self.detail_url('semgrep_999'))
@@ -303,6 +308,10 @@ class FindingDetailEndpointTests(ExplanationTestBase):
         self.assertEqual(res.status_code, http_status.HTTP_200_OK, res.data)
         self.assertEqual(res.data['finding']['id'], 'dep_@babel/core')
         self.assertEqual(res.data['finding']['severity'], 'high')
+        self.assertEqual(res.data['finding']['line'], 12)
+        self.assertEqual(res.data['finding']['nodes'], ['node_modules/@babel/core'])
+        self.assertEqual(res.data['finding']['advisories'][0]['title'], 'Remote code execution')
+        self.assertEqual(res.data['finding']['advisories'][0]['cvss_score'], 9.8)
 
     def test_percent_encoded_finding_id_resolves(self):
         res = self.client.get(self.detail_url('dep_%40babel/core'))

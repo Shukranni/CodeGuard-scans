@@ -1208,6 +1208,36 @@ class DependencyScannerDiscoveryTests(TestCase):
         self.assertEqual(result.get('total_vulnerabilities'), 0)
         self.assertEqual(classify_scan_result(result), 'ok')
 
+    def test_audit_findings_include_the_lockfile_line(self):
+        self._write(
+            'package-lock.json',
+            '{\n'
+            '  "name": "demo",\n'
+            '  "packages": {\n'
+            '    "node_modules/lodash": {\n'
+            '      "version": "4.17.20"\n'
+            '    }\n'
+            '  }\n'
+            '}\n',
+        )
+        fake = mock.Mock()
+        fake.stdout = json.dumps({
+            'vulnerabilities': {
+                'lodash': {
+                    'severity': 'high',
+                    'range': '<4.17.21',
+                    'nodes': ['node_modules/lodash'],
+                    'via': [],
+                },
+            },
+        }).encode()
+        fake.stderr = b''
+        fake.returncode = 1
+        with mock.patch.object(dependency_module, '_find_npm', return_value='npm'):
+            with mock.patch.object(dependency_module.subprocess, 'run', return_value=fake):
+                result = DependencyScanner(self.workdir).scan()
+        self.assertEqual(result['all_vulnerabilities']['lodash']['line'], 4)
+
     def test_npm_lockfile_error_is_skipped_not_failed(self):
         self._write('package.json', '{"name": "demo"}')
         self._write('package-lock.json', '{}')

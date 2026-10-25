@@ -121,8 +121,11 @@ class DashboardOverviewService:
                         'file': file_path,
                         'line': line,
                         'cwe': 'CWE-798',
-                        'owasp': 'A02: Cryptographic Failures',
-                        'description': f"Hardcoded secret ({desc}) found in source code.",
+                        'owasp': 'A07:2021 - Identification and Authentication Failures',
+                        'description': (
+                            f"Hardcoded secret ({desc}) found in {file_path} "
+                            f"at line {line}. Treat the credential as compromised."
+                        ),
                         'scan_id': scan.id,
                         'scan_date': date_key
                     }

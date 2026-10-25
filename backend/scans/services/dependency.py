@@ -1,9 +1,11 @@
 import subprocess
 import json
 import os
+import logging
 import shutil
 
 DEPENDENCY_TIMEOUT = 120
+logger = logging.getLogger(__name__)
 
 # Cached executable lookup so availability is not re-resolved for every scan.
 _NPM_EXE_CACHE = None
@@ -28,6 +30,34 @@ def npm_available():
 class DependencyScanner:
     def __init__(self, project_path):
         self.project_path = project_path
+
+    @staticmethod
+    def _lockfile_lines(scan_dir, vulnerabilities):
+        """Resolve npm package node paths to lines in package-lock.json."""
+        nodes = {
+            node
+            for vuln in vulnerabilities.values()
+            if isinstance(vuln, dict)
+            for node in vuln.get('nodes', [])
+            if isinstance(node, str)
+        }
+        pending = {json.dumps(node, ensure_ascii=False): node for node in nodes}
+        lines = {}
+        if not pending:
+            return lines
+        lockfile_path = os.path.join(scan_dir, 'package-lock.json')
+        try:
+            with open(lockfile_path, 'r', encoding='utf-8') as lockfile:
+                for line_number, line in enumerate(lockfile, start=1):
+                    for serialized_node, node in list(pending.items()):
+                        if serialized_node + ':' in line:
+                            lines[node] = line_number
+                            del pending[serialized_node]
+                    if not pending:
+                        break
+        except OSError:
+            logger.warning('Could not read package-lock.json to locate dependency findings.')
+        return lines
 
     def scan(self):
         try:
@@ -124,6 +154,14 @@ class DependencyScanner:
 
             # Extract vulnerabilities
             vulnerabilities = data.get('vulnerabilities', {})
+            if isinstance(vulnerabilities, dict):
+                node_lines = self._lockfile_lines(scan_dir, vulnerabilities)
+                for vuln in vulnerabilities.values():
+                    if isinstance(vuln, dict):
+                        vuln['line'] = min(
+                            (node_lines[node] for node in vuln.get('nodes', []) if node in node_lines),
+                            default=None,
+                        )
             
             # Count by severity
             severity_counts = {
