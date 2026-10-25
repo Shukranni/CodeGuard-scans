@@ -11,7 +11,7 @@ import Button from '../../../components/ui/Button';
 import SeverityBadge from '../../../components/ui/SeverityBadge';
 import { cn } from '../../../utils/cn';
 
-const FindingRow = ({ finding, onViewDetails, onDismiss }) => {
+const FindingRow = ({ finding, onViewDetails, onDismiss, onOpenInExplorer }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const panelId = `finding-panel-${finding?.id}`;
 
@@ -129,7 +129,7 @@ const FindingRow = ({ finding, onViewDetails, onDismiss }) => {
               </div>
             ) : null}
 
-            <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row">
+            <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:flex-wrap">
               <Button
                 variant="default"
                 size="sm"
@@ -140,6 +140,18 @@ const FindingRow = ({ finding, onViewDetails, onDismiss }) => {
               >
                 AI explanation
               </Button>
+              {finding?.file && onOpenInExplorer ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  fullWidth
+                  onClick={() => onOpenInExplorer(finding)}
+                  iconName="FolderTree"
+                  iconPosition="left"
+                >
+                  Open in code explorer
+                </Button>
+              ) : null}
               <Button
                 variant="outline"
                 size="sm"

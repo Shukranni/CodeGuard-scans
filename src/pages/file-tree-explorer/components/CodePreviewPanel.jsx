@@ -2,13 +2,21 @@
  * CodePreviewPanel — syntax-less code viewer with finding annotations and safe highlighting.
  */
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import hljs from 'highlight.js/lib/common';
 import Icon from '../../../components/AppIcon';
 import Button from '../../../components/ui/Button';
 import { Skeleton } from '../../../components/ui/Skeleton';
 import SeverityBadge, { getSeverityConfig } from '../../../components/ui/SeverityBadge';
 import { cn } from '../../../utils/cn';
 
-const normalizePath = (p) => (p || '').replace(/\\/g, '/').replace(/^\/+/, '');
+const normalizePath = (p) =>
+  (p || '')
+    .replace(/\\/g, '/')
+    .replace(/^[A-Za-z]:\//, '')
+    .replace(/^\/+/, '')
+    .split('/')
+    .filter((part) => part && part !== '.')
+    .join('/');
 
 const escapeHtml = (str) =>
   String(str)
@@ -19,6 +27,91 @@ const escapeHtml = (str) =>
     .replace(/'/g, '&#39;');
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const LANGUAGE_BY_EXTENSION = {
+  js: 'javascript',
+  jsx: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
+  ts: 'typescript',
+  tsx: 'typescript',
+  py: 'python',
+  java: 'java',
+  php: 'php',
+  html: 'xml',
+  htm: 'xml',
+  xml: 'xml',
+  vue: 'xml',
+  svelte: 'xml',
+  css: 'css',
+  scss: 'scss',
+  c: 'c',
+  h: 'c',
+  cpp: 'cpp',
+  cc: 'cpp',
+  hpp: 'cpp',
+  go: 'go',
+  rb: 'ruby',
+  rs: 'rust',
+  sh: 'bash',
+  bash: 'bash',
+  json: 'json',
+  yml: 'yaml',
+  yaml: 'yaml',
+  md: 'markdown',
+  toml: 'toml',
+  ini: 'ini',
+  cfg: 'ini',
+  sql: 'sql',
+  kt: 'kotlin',
+  swift: 'swift',
+  scala: 'scala',
+  r: 'r',
+  dart: 'dart',
+};
+
+const resolveLanguage = (file, declaredLanguage) => {
+  const extension = file?.path?.split('.').pop()?.toLowerCase();
+  const language =
+    LANGUAGE_BY_EXTENSION[extension] ||
+    String(declaredLanguage || '').toLowerCase();
+  return hljs.getLanguage(language) ? language : null;
+};
+
+const addSearchMarks = (html, searchQuery) => {
+  if (!searchQuery || typeof document === 'undefined') return html;
+
+  const container = document.createElement('span');
+  container.innerHTML = html;
+  const walker = document.createTreeWalker(container, 4);
+  const textNodes = [];
+  let node;
+  while ((node = walker.nextNode())) textNodes.push(node);
+
+  const regex = new RegExp(escapeRegex(searchQuery), 'gi');
+  textNodes.forEach((textNode) => {
+    const text = textNode.nodeValue || '';
+    regex.lastIndex = 0;
+    if (!regex.test(text)) return;
+    regex.lastIndex = 0;
+
+    const fragment = document.createDocumentFragment();
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(text))) {
+      fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+      const mark = document.createElement('mark');
+      mark.className = 'rounded bg-warning/40 text-foreground';
+      mark.textContent = match[0];
+      fragment.appendChild(mark);
+      lastIndex = match.index + match[0].length;
+    }
+    fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+    textNode.parentNode?.replaceChild(fragment, textNode);
+  });
+
+  return container.innerHTML;
+};
 
 const CodePreviewPanel = ({
   file,
@@ -34,39 +127,84 @@ const CodePreviewPanel = ({
   const [jumpToLine, setJumpToLine] = useState('');
   const [highlightedLine, setHighlightedLine] = useState(null);
   const containerRef = useRef(null);
+  const lines = useMemo(
+    () => (fileContent ? String(fileContent.content || '').split('\n') : []),
+    [fileContent],
+  );
 
-  // Scroll to selected finding's line
+  // Scanner line numbers are one-based; rendered row IDs use those same numbers.
   useEffect(() => {
-    if (selectedFinding?.line) {
-      setHighlightedLine(selectedFinding.line);
-      const el = document.getElementById(`line-${selectedFinding.line}`);
-      if (el) {
-        const reduced =
-          typeof window !== 'undefined' &&
-          typeof window.matchMedia === 'function' &&
-          window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        el.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
-      }
+    const lineNumber = Number(selectedFinding?.line);
+    const findingPath = normalizePath(selectedFinding?.resolvedPath || selectedFinding?.file);
+    const isForCurrentFile = findingPath && findingPath === normalizePath(file?.path);
+    const isValidLine =
+      Number.isInteger(lineNumber) && lineNumber > 0 && lineNumber <= lines.length;
+
+    setHighlightedLine(null);
+    if (!isForCurrentFile || !isValidLine || !fileContent) return;
+
+    setHighlightedLine(lineNumber);
+    const el = containerRef.current?.querySelector(`#line-${lineNumber}`);
+    if (el) {
+      const reduced =
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      el.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
     }
-  }, [selectedFinding, fileContent]);
+  }, [selectedFinding, fileContent, file, lines.length]);
 
   // Findings for THIS file
   const fileFindings = useMemo(() => {
     if (!file || !findings.length) return [];
     const normFile = normalizePath(file.path);
-    return findings.filter((f) => normalizePath(f.file) === normFile);
+    return findings.filter((f) => normalizePath(f.resolvedPath) === normFile);
   }, [file, findings]);
 
   // Map line → findings
   const findingsByLine = useMemo(() => {
     const map = new Map();
+    const contentLineCount = lines.length;
+    const addFindingToLine = (line, finding) => {
+      if (!map.has(line)) map.set(line, []);
+      map.get(line).push(finding);
+    };
+
     fileFindings.forEach((f) => {
-      if (!f.line) return;
-      if (!map.has(f.line)) map.set(f.line, []);
-      map.get(f.line).push(f);
+      const startLine = Number(f.line);
+      const endLine = Number(f.endLine) || startLine;
+
+      if (Number.isInteger(startLine) && startLine > 0 && startLine <= contentLineCount) {
+        const lastLine = Number.isInteger(endLine) && endLine >= startLine
+          ? Math.min(endLine, contentLineCount)
+          : startLine;
+        for (let line = startLine; line <= lastLine; line += 1) {
+          addFindingToLine(line, f);
+        }
+      }
     });
     return map;
-  }, [fileFindings]);
+  }, [fileFindings, lines.length]);
+
+  const selectedFindingIndex = fileFindings.findIndex(
+    (finding) => finding.id === selectedFinding?.id,
+  );
+  const selectedHasReportedLine =
+    selectedFinding?.line !== null
+    && selectedFinding?.line !== undefined
+    && selectedFinding?.line !== '';
+  const selectedLine = Number(selectedFinding?.line);
+  const selectedLineIsValid =
+    Number.isInteger(selectedLine) && selectedLine > 0 && selectedLine <= lines.length;
+  const selectedFindingIsForFile =
+    selectedFinding
+    && normalizePath(selectedFinding.resolvedPath || selectedFinding.file) === normalizePath(file?.path);
+  const activeLineSurface = {
+    critical: 'bg-critical/25',
+    high: 'bg-high/25',
+    medium: 'bg-medium/25',
+    low: 'bg-low/25',
+  }[String(selectedFinding?.severity || '').toLowerCase()] || 'bg-primary/15';
 
   const handleJumpToLine = () => {
     const lineNum = parseInt(jumpToLine, 10);
@@ -170,7 +308,7 @@ const CodePreviewPanel = ({
 
   if (!fileContent) return null;
 
-  const lines = String(fileContent.content || '').split('\n');
+  const language = resolveLanguage(file, fileContent.language);
 
   return (
     <div className={cn('flex h-full flex-col rounded-xl border border-border bg-card', className)}>
@@ -243,32 +381,83 @@ const CodePreviewPanel = ({
         </div>
       </div>
 
-      {/* Finding navigation */}
-      {fileFindings.length > 1 ? (
-        <div className="flex items-center gap-2 overflow-x-auto border-b border-border p-3">
-          <span className="flex-shrink-0 text-xs text-muted-foreground">Jump to finding</span>
-          {fileFindings.map((f) => {
-            const cfg = getSeverityConfig(f.severity);
-            const isActive = selectedFinding?.id === f.id;
-            return (
-              <button
-                key={f.id}
-                onClick={() => onFindingClick?.(f)}
-                className={cn(
-                  'flex flex-shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs transition-colors',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  isActive
-                    ? 'border-primary bg-primary/10 text-primary'
-                    : cn(cfg.badge, 'hover:opacity-90'),
-                )}
-                type="button"
-              >
-                <Icon name={cfg.icon} size={12} aria-hidden="true" />
-                <span>L{f.line || '?'}</span>
-                <span className="uppercase tracking-wide">{cfg.label}</span>
-              </button>
-            );
-          })}
+      {/* Current finding and navigation */}
+      {selectedFindingIsForFile ? (
+        <div className="space-y-2 border-b border-border px-3 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <SeverityBadge severity={selectedFinding.severity} size="xs" />
+              <span className="truncate text-xs font-semibold text-foreground">
+                {selectedFinding.title}
+              </span>
+              {selectedFinding.scanner ? (
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {selectedFinding.scanner}
+                </span>
+              ) : null}
+              <span className="shrink-0 text-xs text-muted-foreground">
+                Line {selectedHasReportedLine ? selectedFinding.line : 'not reported'}
+              </span>
+            </div>
+            {fileFindings.length > 1 ? (
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  Finding {selectedFindingIndex >= 0 ? selectedFindingIndex + 1 : '—'} of {fileFindings.length}
+                </span>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  iconName="ChevronLeft"
+                  iconPosition="left"
+                  aria-label="Previous finding"
+                  title="Previous finding"
+                  disabled={selectedFindingIndex <= 0}
+                  onClick={() => onFindingClick?.(fileFindings[selectedFindingIndex - 1])}
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  iconName="ChevronRight"
+                  iconPosition="right"
+                  aria-label="Next finding"
+                  title="Next finding"
+                  disabled={selectedFindingIndex < 0 || selectedFindingIndex >= fileFindings.length - 1}
+                  onClick={() => onFindingClick?.(fileFindings[selectedFindingIndex + 1])}
+                >
+                  Next
+                </Button>
+              </div>
+            ) : null}
+          </div>
+          {selectedHasReportedLine && !selectedLineIsValid ? (
+            <p role="status" className="text-xs text-warning">
+              Reported line {selectedFinding.line} is outside this file's loaded range ({lines.length} lines).
+            </p>
+          ) : !selectedHasReportedLine ? (
+            <p role="status" className="text-xs text-muted-foreground">
+              The scanner did not report a source line for this finding.
+            </p>
+          ) : null}
+        </div>
+      ) : fileFindings.length > 1 ? (
+        <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
+          <span className="text-xs text-muted-foreground">{fileFindings.length} findings in this file</span>
+          {fileFindings.map((finding) => (
+            <button
+              key={finding.id}
+              type="button"
+              onClick={() => onFindingClick?.(finding)}
+              className={cn(
+                'flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs',
+                getSeverityConfig(finding.severity).badge,
+              )}
+              aria-label={`Select ${finding.title}, line ${finding.line || 'not reported'}`}
+            >
+              L{finding.line || '?'}
+            </button>
+          ))}
         </div>
       ) : null}
 
@@ -279,30 +468,19 @@ const CodePreviewPanel = ({
             const lineNumber = index + 1;
             const lineFindings = findingsByLine.get(lineNumber) || [];
             const hasFindings = lineFindings.length > 0;
-            const isHighlighted =
-              lineNumber === highlightedLine || selectedFinding?.line === lineNumber;
+            const isHighlighted = lineNumber === highlightedLine;
+            const isActiveFindingLine = lineFindings.some(
+              (finding) => finding.id === selectedFinding?.id,
+            );
             const highestFinding = lineFindings[0];
             const highestCfg = highestFinding ? getSeverityConfig(highestFinding.severity) : null;
 
-            let contentHtml = escapeHtml(line || ' ');
-            let hasSearchMatch = false;
-            if (searchQuery) {
-              const lowerLine = line.toLowerCase();
-              const lowerQuery = searchQuery.toLowerCase();
-              if (lowerLine.includes(lowerQuery)) {
-                hasSearchMatch = true;
-                try {
-                  const regex = new RegExp(`(${escapeRegex(searchQuery)})`, 'gi');
-                  contentHtml = escapeHtml(line || ' ').replace(
-                    regex,
-                    '<mark class="rounded bg-warning/40 text-foreground">$1</mark>',
-                  );
-                } catch {
-                  // fall back to escaped content
-                  contentHtml = escapeHtml(line || ' ');
-                }
-              }
-            }
+            const hasSearchMatch =
+              !!searchQuery && line.toLowerCase().includes(searchQuery.toLowerCase());
+            const highlightedHtml = language
+              ? hljs.highlight(line || ' ', { language, ignoreIllegals: true }).value
+              : escapeHtml(line || ' ');
+            const contentHtml = addSearchMarks(highlightedHtml, searchQuery);
 
             return (
               <div
@@ -313,8 +491,15 @@ const CodePreviewPanel = ({
                   hasFindings && highestCfg
                     ? cn(highestCfg.surface, 'border-l-current')
                     : 'border-l-transparent',
-                  isHighlighted ? 'bg-primary/5' : hasSearchMatch ? 'bg-warning/5' : 'hover:bg-muted/20',
+                  isActiveFindingLine
+                    ? cn(activeLineSurface, 'z-[1] border-l-4 ring-2 ring-inset ring-primary/70')
+                    : isHighlighted
+                      ? 'ring-1 ring-inset ring-primary/60'
+                      : hasSearchMatch
+                        ? 'bg-warning/5'
+                        : 'hover:bg-muted/20',
                 )}
+                aria-current={isActiveFindingLine ? 'location' : undefined}
               >
                 <button
                   type="button"
@@ -331,7 +516,7 @@ const CodePreviewPanel = ({
                 </button>
                 <div className="flex-1 overflow-x-auto px-4 py-0.5">
                   <pre
-                    className="whitespace-pre leading-6 text-foreground"
+                    className="hljs whitespace-pre leading-6 text-foreground"
                     dangerouslySetInnerHTML={{ __html: contentHtml }}
                   />
                 </div>

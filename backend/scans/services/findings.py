@@ -228,7 +228,7 @@ def _gitleaks_findings(scanners_data, dismissed):
             'severity': 'critical',
             'file': file_path,
             'line': start_line,
-            'end_line': start_line,
+            'end_line': end_line,
             'description': (
                 f'{description} detected in {file_path or "the project"}. '
                 'The value is committed in source control and must be treated '

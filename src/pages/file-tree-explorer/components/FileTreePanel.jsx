@@ -1,7 +1,7 @@
 /**
  * FileTreePanel — project file browser with vulnerability markers.
  */
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Icon from '../../../components/AppIcon';
 import Input from '../../../components/ui/Input';
 import { SeverityDot } from '../../../components/ui/SeverityBadge';
@@ -9,7 +9,14 @@ import { Skeleton } from '../../../components/ui/Skeleton';
 import { cn } from '../../../utils/cn';
 
 // Normalise paths consistently (same logic as backend)
-const normalizePath = (p) => (p || '').replace(/\\/g, '/').replace(/^\/+/, '');
+const normalizePath = (p) =>
+  (p || '')
+    .replace(/\\/g, '/')
+    .replace(/^[A-Za-z]:\//, '')
+    .replace(/^\/+/, '')
+    .split('/')
+    .filter((part) => part && part !== '.')
+    .join('/');
 
 const SEVERITY_ORDER = { critical: 4, high: 3, medium: 2, low: 1 };
 
@@ -20,6 +27,7 @@ const FileTreePanel = ({
   selectedFile,
   onFileSelect,
   findings = [],
+  revealFilePath,
   className,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -27,12 +35,29 @@ const FileTreePanel = ({
   const [showVulnerabilitiesOnly, setShowVulnerabilitiesOnly] = useState(false);
   const [fileTypeFilter, setFileTypeFilter] = useState('all');
 
+  useEffect(() => {
+    if (!revealFilePath) return;
+    const parts = normalizePath(revealFilePath).split('/');
+    if (parts.length < 2) return;
+
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      let folderPath = '';
+      parts.slice(0, -1).forEach((part, index) => {
+        folderPath = index === 0 ? part : `${folderPath}/${part}`;
+        next.add(folderPath);
+      });
+      return next;
+    });
+  }, [revealFilePath]);
+
   // Build a findings map keyed by normalised file path
   const findingsByFile = useMemo(() => {
     const map = {};
     findings.forEach((f) => {
-      if (!f.file) return;
-      const key = normalizePath(f.file);
+      const path = f.resolvedPath;
+      if (!path) return;
+      const key = normalizePath(path);
       if (!map[key]) map[key] = [];
       map[key].push(f);
     });
@@ -120,19 +145,40 @@ const FileTreePanel = ({
 
   // Filter files
   const filteredFiles = useMemo(() => {
-    return files.filter((file) => {
+    const search = searchQuery.toLowerCase();
+    const matchesFile = (file) => {
       const matchesSearch = normalizePath(file.path)
         .toLowerCase()
-        .includes(searchQuery.toLowerCase());
+        .includes(search);
       const hasFindings = getFileFindings(file.path).length > 0;
-      const matchesVulnFilter = !showVulnerabilitiesOnly || hasFindings || file.isFolder;
       let matchesTypeFilter = true;
-      if (fileTypeFilter !== 'all' && !file.isFolder) {
+      if (fileTypeFilter !== 'all') {
         const ext = file.path?.split('.').pop()?.toLowerCase();
         matchesTypeFilter = ext === fileTypeFilter;
       }
-      return matchesSearch && matchesVulnFilter && matchesTypeFilter;
+      return matchesSearch && (!showVulnerabilitiesOnly || hasFindings) && matchesTypeFilter;
+    };
+
+    if (!search && !showVulnerabilitiesOnly && fileTypeFilter === 'all') return files;
+
+    const matchingFiles = files.filter((file) => !file.isFolder && matchesFile(file));
+    const visiblePaths = new Set();
+    matchingFiles.forEach((file) => {
+      const parts = normalizePath(file.path).split('/');
+      parts.forEach((_, index) => {
+        visiblePaths.add(parts.slice(0, index + 1).join('/'));
+      });
     });
+
+    files.forEach((file) => {
+      if (!file.isFolder) return;
+      const folderPath = normalizePath(file.path);
+      if (!showVulnerabilitiesOnly && folderPath.toLowerCase().includes(search)) {
+        visiblePaths.add(folderPath);
+      }
+    });
+
+    return files.filter((file) => visiblePaths.has(normalizePath(file.path)));
   }, [files, searchQuery, showVulnerabilitiesOnly, fileTypeFilter, findingsByFile]);
 
   // Build the hierarchical tree from a flat list
@@ -261,7 +307,12 @@ const FileTreePanel = ({
 
   // ── Stats ──
   const fileCount = files.filter((f) => !f.isFolder).length;
-  const filesWithIssues = new Set(findings.map((f) => normalizePath(f.file))).size;
+  const filesWithIssues = new Set(
+    findings
+      .map((f) => f.resolvedPath)
+      .filter(Boolean)
+      .map(normalizePath),
+  ).size;
 
   // ── Loading state ──
   if (loading) {

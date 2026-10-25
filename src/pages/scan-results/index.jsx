@@ -159,6 +159,7 @@ const ScanResults = () => {
       if (scanner === 'semgrep') {
         if (s === 'error') return 'critical';
         if (s === 'warning') return 'high';
+        if (s === 'info') return 'low';
         return 'medium';
       }
       if (scanner === 'gitleaks') return 'critical';
@@ -166,7 +167,8 @@ const ScanResults = () => {
         if (s === 'critical') return 'critical';
         if (s === 'high') return 'high';
         if (s === 'moderate') return 'medium';
-        return 'low';
+        if (s === 'low') return 'low';
+        return 'medium';
       }
       return 'medium';
     };
@@ -176,12 +178,16 @@ const ScanResults = () => {
       scannersData.semgrep.all_vulnerabilities.forEach((f, idx) => {
         findings.push({
           id: `semgrep_${idx}`,
+          scanId: rawData?.id,
+          projectId: rawData?.project,
           title: f.extra?.message?.split('.')?.[0] || 'Security issue detected',
           severity: mapSeverity(f.extra?.severity, 'semgrep'),
           confidence: 90,
           scanner: 'Semgrep',
           file: f.path,
           line: f.start?.line,
+          endLine: f.end?.line,
+          ruleId: f.check_id || null,
           language: f.path?.split('.')?.[f.path?.split('.')?.length - 1] || 'unknown',
           owasp: f.extra?.metadata?.owasp?.[0] || 'N/A',
           cwe: f.extra?.metadata?.cwe?.[0] || 'N/A',
@@ -199,12 +205,16 @@ const ScanResults = () => {
       scannersData.gitleaks.all_vulnerabilities.forEach((f, idx) => {
         findings.push({
           id: `gitleaks_${idx}`,
+          scanId: rawData?.id,
+          projectId: rawData?.project,
           title: `Exposed Secret: ${f.Description || 'Credential'}`,
           severity: 'critical',
           confidence: 98,
           scanner: 'GitLeaks',
           file: f.File,
           line: f.StartLine,
+          endLine: f.EndLine,
+          ruleId: f.RuleID || null,
           language: f.File?.split('.')?.[f.File?.split('.')?.length - 1] || 'unknown',
           owasp: 'A02:2021',
           cwe: 'CWE-798',
@@ -222,12 +232,15 @@ const ScanResults = () => {
       Object?.entries(scannersData.dependency.all_vulnerabilities).forEach(([pkg, info]) => {
         findings.push({
           id: `dep_${pkg}`,
+          scanId: rawData?.id,
+          projectId: rawData?.project,
           title: `Vulnerable Dependency: ${pkg} ${info.range}`,
           severity: mapSeverity(info.severity, 'dependency'),
           confidence: 100,
           scanner: 'Dependency',
           file: 'package-lock.json',
-          line: 0,
+          line: null,
+          ruleId: pkg,
           language: 'npm',
           owasp: 'A06:2021',
           cwe: 'CWE-1104',
@@ -788,6 +801,13 @@ const ScanResults = () => {
     }
   };
 
+  const openFindingInExplorer = (finding) => {
+    if (!scanData?.projectId || !scanData?.scanId) return;
+    navigate(`/file-tree-explorer/${scanData.projectId}/${scanData.scanId}`, {
+      state: { finding },
+    });
+  };
+
   return (
     <AppShell
       headerTitle="Scan results"
@@ -1048,6 +1068,7 @@ const ScanResults = () => {
                       finding={finding}
                       onViewDetails={handleViewDetails}
                       onDismiss={handleDismissFinding}
+                      onOpenInExplorer={openFindingInExplorer}
                     />
                   </li>
                 ))}

@@ -7,7 +7,7 @@
  *   GET /api/projects/<id>/file/?path= → the content of one file
  *   GET /api/scans/<id>/               → the findings of the linked scan
  */
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../utils/api';
@@ -27,7 +27,49 @@ import FindingDetailsPanel from './components/FindingDetailsPanel';
 // ── Path normalisation (mirrors backend logic) ────────────────────────────────
 const normalizePath = (p) => {
   if (!p) return '';
-  return p.replace(/\\/g, '/').replace(/^\/+/, '');
+  return p
+    .replace(/\\/g, '/')
+    .replace(/^[A-Za-z]:\//, '')
+    .replace(/^\/+/, '')
+    .split('/')
+    .filter((part) => part && part !== '.')
+    .join('/');
+};
+
+const SEVERITY_RANK = { critical: 4, high: 3, medium: 2, low: 1 };
+
+const sortFindings = (items) =>
+  [...items].sort((a, b) => {
+    const severityDifference =
+      (SEVERITY_RANK[String(b.severity || '').toLowerCase()] || 0)
+      - (SEVERITY_RANK[String(a.severity || '').toLowerCase()] || 0);
+    if (severityDifference) return severityDifference;
+    const lineA = Number.isInteger(Number(a.line)) && Number(a.line) > 0
+      ? Number(a.line)
+      : Number.POSITIVE_INFINITY;
+    const lineB = Number.isInteger(Number(b.line)) && Number(b.line) > 0
+      ? Number(b.line)
+      : Number.POSITIVE_INFINITY;
+    return lineA - lineB;
+  });
+
+const resolveFindingFile = (findingPath, files) => {
+  const requestedPath = normalizePath(findingPath);
+  if (!requestedPath) return null;
+
+  const fileEntries = files.filter((file) => !file.isFolder);
+  const exact = fileEntries.filter((file) => normalizePath(file.path) === requestedPath);
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) return null;
+
+  // Scanner paths may omit (or include) a single ZIP root directory. Resolve
+  // only a unique full-path suffix match; never fall back to basename alone.
+  const suffixMatches = fileEntries.filter((file) => {
+    const archivePath = normalizePath(file.path);
+    return archivePath.endsWith(`/${requestedPath}`)
+      || requestedPath.endsWith(`/${archivePath}`);
+  });
+  return suffixMatches.length === 1 ? suffixMatches[0] : null;
 };
 
 // ── Severity mapping from scan-results transform ──────────────────────────────
@@ -36,6 +78,7 @@ const mapSeverity = (severity, scanner) => {
   if (scanner === 'semgrep' || scanner === 'Semgrep') {
     if (s === 'error') return 'critical';
     if (s === 'warning') return 'high';
+    if (s === 'info') return 'low';
     return 'medium';
   }
   if (scanner === 'gitleaks' || scanner === 'GitLeaks') return 'critical';
@@ -43,7 +86,8 @@ const mapSeverity = (severity, scanner) => {
     if (s === 'critical') return 'critical';
     if (s === 'high') return 'high';
     if (s === 'moderate') return 'medium';
-    return 'low';
+    if (s === 'low') return 'low';
+    return 'medium';
   }
   const known = { critical: 'critical', high: 'high', medium: 'medium', low: 'low', error: 'critical', warning: 'high' };
   return known[s] || 'medium';
@@ -61,6 +105,8 @@ const extractFindings = (scanResult) => {
     scannersData.semgrep.all_vulnerabilities.forEach((f, idx) => {
       findings.push({
         id: `semgrep_${idx}`,
+        scanId: scanResult.id,
+        projectId: scanResult.project,
         title: f.extra?.message?.split('.')?.[0] || 'Security issue detected',
         severity: mapSeverity(f.extra?.severity, 'semgrep'),
         scanner: 'Semgrep',
@@ -83,6 +129,8 @@ const extractFindings = (scanResult) => {
     scannersData.gitleaks.all_vulnerabilities.forEach((f, idx) => {
       findings.push({
         id: `gitleaks_${idx}`,
+        scanId: scanResult.id,
+        projectId: scanResult.project,
         title: `Exposed Secret: ${f.Description || 'Credential'}`,
         severity: 'critical',
         scanner: 'GitLeaks',
@@ -105,11 +153,13 @@ const extractFindings = (scanResult) => {
     Object.entries(scannersData.dependency.all_vulnerabilities).forEach(([pkg, info]) => {
       findings.push({
         id: `dep_${pkg}`,
+        scanId: scanResult.id,
+        projectId: scanResult.project,
         title: `Vulnerable Dependency: ${pkg} ${info.range}`,
         severity: mapSeverity(info.severity, 'dependency'),
         scanner: 'Dependency',
         file: normalizePath('package-lock.json'),
-        line: 0,
+        line: null,
         description: `Package ${pkg} has known security vulnerabilities.`,
         codeSnippet: `"${pkg}": "${info.range}"`,
         remediation: `Update ${pkg} to the latest secure version: npm update ${pkg}`,
@@ -131,13 +181,14 @@ const FileTreeExplorer = () => {
   const location = useLocation();
   const { projectId: routeProjectId, scanId: routeScanId } = useParams();
   const { isLoading: authLoading } = useAuth();
+  const projectId = routeProjectId || location.state?.projectId || null;
+  const scanId = routeScanId || location.state?.scanId || null;
 
   // State
-  const [projectId, setProjectId] = useState(routeProjectId || null);
-  const [scanId, setScanId] = useState(routeScanId || null);
   const [projectName, setProjectName] = useState('');
 
   const [files, setFiles] = useState([]);
+  const [filesProjectId, setFilesProjectId] = useState(null);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesError, setFilesError] = useState(null);
 
@@ -147,7 +198,10 @@ const FileTreeExplorer = () => {
   const [fileError, setFileError] = useState(null);
 
   const [findings, setFindings] = useState([]);
+  const [findingsScanId, setFindingsScanId] = useState(null);
+  const [findingsProjectId, setFindingsProjectId] = useState(null);
   const [findingsLoading, setFindingsLoading] = useState(false);
+  const [findingsError, setFindingsError] = useState(null);
 
   const [selectedFinding, setSelectedFinding] = useState(null);
   const [showAIExplanation, setShowAIExplanation] = useState(false);
@@ -155,161 +209,300 @@ const FileTreeExplorer = () => {
 
   const [viewMode, setViewMode] = useState('split'); // 'split' | 'full'
   const [projects, setProjects] = useState([]);
+  const [projectsError, setProjectsError] = useState(null);
+  const [fileContentProjectId, setFileContentProjectId] = useState(null);
+  const [findingNavigationError, setFindingNavigationError] = useState(null);
 
   // Navigate-to-line from location.state (when coming from scan-results finding click)
   const pendingNavigateRef = useRef(null);
+  const pendingAutoSelectRef = useRef(null);
+  const fileRequestRef = useRef(0);
+  const visibleFiles = filesProjectId === projectId ? files : [];
+  const visibleFindings =
+    findingsScanId === scanId && (!projectId || findingsProjectId === projectId)
+      ? findings
+      : [];
+  const visibleSelectedFile = filesProjectId === projectId ? selectedFile : null;
+  const visibleFileContent =
+    fileContentProjectId === projectId ? fileContent : null;
+  const visibleProjectName = filesProjectId === projectId ? projectName : '';
+  const visibleResolvedFindings = useMemo(
+    () => visibleFindings.map((finding) => ({
+      ...finding,
+      resolvedPath: resolveFindingFile(finding.file, visibleFiles)?.path || null,
+      scanId: finding.scanId || scanId,
+      projectId: finding.projectId || findingsProjectId || projectId,
+    })),
+    [visibleFindings, visibleFiles, scanId, findingsProjectId, projectId],
+  );
+  const orderedResolvedFindings = useMemo(
+    () => sortFindings(visibleResolvedFindings),
+    [visibleResolvedFindings],
+  );
 
-  // ── Derive projectId/scanId from location state if not in route ─────────────
   useEffect(() => {
-    if (location.state?.projectId && !routeProjectId) {
-      setProjectId(location.state.projectId);
-    }
-    if (location.state?.scanId && !routeScanId) {
-      setScanId(location.state.scanId);
-    }
     if (location.state?.finding) {
       pendingNavigateRef.current = location.state.finding;
     }
-  }, [location.state, routeProjectId, routeScanId]);
-
-  // Sync route params into state
-  useEffect(() => {
-    if (routeProjectId) setProjectId(routeProjectId);
-    if (routeScanId) setScanId(routeScanId);
-  }, [routeProjectId, routeScanId]);
+  }, [location.state]);
 
   // ── Fetch user's project list (for the project picker) ───────────────────────
   useEffect(() => {
     if (authLoading) return;
+    let active = true;
     api.get('/api/projects/')
-      .then((r) => setProjects(r.data || []))
-      .catch(() => {});
+      .then((r) => {
+        if (!active) return;
+        setProjects(r.data || []);
+        setProjectsError(null);
+      })
+      .catch(() => {
+        if (!active) return;
+        setProjectsError('Could not load your projects. Please try again.');
+      });
+    return () => {
+      active = false;
+    };
   }, [authLoading]);
 
   // ── Fetch file tree when projectId is known ─────────────────────────────────
   useEffect(() => {
-    if (authLoading || !projectId) return;
+    if (authLoading) return;
+    let active = true;
+
+    fileRequestRef.current += 1;
+    setFilesProjectId(null);
+    setSelectedFile(null);
+    setFileContent(null);
+    setFileContentProjectId(null);
+    setFileError(null);
+    setSelectedFinding(null);
+    setFindingNavigationError(null);
+    pendingAutoSelectRef.current = null;
+
+    if (!projectId) {
+      setFiles([]);
+      setProjectName('');
+      setFilesError(null);
+      setFilesLoading(false);
+      return () => {
+        active = false;
+      };
+    }
 
     setFilesLoading(true);
     setFilesError(null);
     setFiles([]);
-    setSelectedFile(null);
-    setFileContent(null);
 
     api.get(`/api/projects/${projectId}/filetree/`)
       .then((r) => {
+        if (!active) return;
         setFiles(r.data.files || []);
         setProjectName(r.data.projectName || '');
+        setFilesProjectId(projectId);
       })
       .catch((err) => {
+        if (!active) return;
         const st = err.response?.status;
-        if (st === 404) setFilesError('Project not found. It may have been deleted.');
+        if (st === 404) {
+          setFilesError(err.response.data?.error || 'Project not found. It may have been deleted.');
+        }
         else if (st === 403 || st === 401) setFilesError('You do not have access to this project.');
         else setFilesError('Could not load the file tree. Please try again.');
       })
-      .finally(() => setFilesLoading(false));
+      .finally(() => {
+        if (active) setFilesLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, [authLoading, projectId]);
 
   // ── Fetch scan findings when scanId is known ────────────────────────────────
   useEffect(() => {
-    if (authLoading || !scanId) return;
+    if (authLoading) return;
+    let active = true;
+    setFindings([]);
+    setFindingsScanId(null);
+    setFindingsProjectId(null);
+    setFindingsError(null);
+    setSelectedFinding(null);
+    setShowFindingPanel(false);
+    setFindingNavigationError(null);
+    pendingAutoSelectRef.current = null;
+
+    if (!scanId) {
+      setFindingsLoading(false);
+      return () => {
+        active = false;
+      };
+    }
 
     setFindingsLoading(true);
     api.get(`/api/scans/${scanId}/`)
       .then((r) => {
+        if (!active) return;
+        if (projectId && String(r.data.project) !== String(projectId)) {
+          setFindingsError('This scan does not belong to the selected project.');
+          return;
+        }
         const extracted = extractFindings(r.data);
         setFindings(extracted);
+        setFindingsScanId(scanId);
+        setFindingsProjectId(String(r.data.project));
       })
-      .catch(() => setFindings([]))
-      .finally(() => setFindingsLoading(false));
-  }, [authLoading, scanId]);
+      .catch(() => {
+        if (active) setFindingsError('Could not load findings for this scan.');
+      })
+      .finally(() => {
+        if (active) setFindingsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [authLoading, projectId, scanId]);
 
   // ── Load file content when a file is selected ───────────────────────────────
   const loadFileContent = useCallback(async (file) => {
-    if (!file || file.isFolder || file.isBinary) return;
+    if (!file || file.isFolder) return;
+    const requestId = ++fileRequestRef.current;
+    const requestedProjectId = projectId;
 
     setFileLoading(true);
     setFileError(null);
     setFileContent(null);
+    setFileContentProjectId(null);
+
+    if (file.isBinary) {
+      setFileError({ type: 'binary', message: 'Binary files cannot be previewed.' });
+      setFileLoading(false);
+      return;
+    }
 
     try {
-      const res = await api.get(`/api/projects/${projectId}/file/`, {
+      const res = await api.get(`/api/projects/${requestedProjectId}/file/`, {
         params: { path: file.path },
       });
+      if (requestId !== fileRequestRef.current) return;
       setFileContent(res.data);
+      setFileContentProjectId(requestedProjectId);
     } catch (err) {
+      if (requestId !== fileRequestRef.current) return;
       const st = err.response?.status;
       if (st === 422) {
         setFileError({ type: 'binary', message: err.response.data?.error || 'Binary file cannot be previewed.' });
       } else if (st === 404) {
-        setFileError({ type: 'notfound', message: 'File not found in the project archive.' });
+        setFileError({ type: 'notfound', message: err.response.data?.error || 'File not found in the project archive.' });
       } else {
         setFileError({ type: 'error', message: 'Failed to load file content.' });
       }
     } finally {
-      setFileLoading(false);
+      if (requestId === fileRequestRef.current) setFileLoading(false);
     }
   }, [projectId]);
 
   const handleFileSelect = useCallback((file) => {
     if (file.isFolder) return;
+    const fileFindings = sortFindings(
+      visibleResolvedFindings.filter(
+        (finding) => finding.resolvedPath && normalizePath(finding.resolvedPath) === normalizePath(file.path),
+      ),
+    );
+    pendingAutoSelectRef.current = { filePath: normalizePath(file.path), scanId };
     setSelectedFile(file);
-    setSelectedFinding(null);
+    setSelectedFinding(fileFindings[0] || null);
+    setShowFindingPanel(false);
+    setFindingNavigationError(null);
     loadFileContent(file);
-  }, [loadFileContent]);
-
-  const scrollToLine = useCallback((line) => {
-    if (!line) return;
-    const el = document.getElementById(`line-${line}`);
-    if (!el) return;
-    const reduced =
-      typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    el.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
-  }, []);
+  }, [visibleResolvedFindings, scanId, loadFileContent]);
 
   // ── Navigate to a finding from the finding details panel ────────────────────
   const handleFindingNavigate = useCallback((finding) => {
+    pendingAutoSelectRef.current = null;
+    setShowFindingPanel(false);
+    setSelectedFinding({
+      ...finding,
+      resolvedPath: resolveFindingFile(finding.file, visibleFiles)?.path || null,
+      scanId: finding.scanId || scanId,
+      projectId: finding.projectId || projectId,
+    });
+
+    if (finding.scanId && scanId && String(finding.scanId) !== String(scanId)) {
+      fileRequestRef.current += 1;
+      setSelectedFile(null);
+      setFileContent(null);
+      setFileLoading(false);
+      setFileError(null);
+      setFindingNavigationError('This finding belongs to a different scan than the one currently selected.');
+      return;
+    }
+
+    const matchedFile = resolveFindingFile(finding.file, visibleFiles);
+    if (!matchedFile) {
+      fileRequestRef.current += 1;
+      setSelectedFile(null);
+      setFileContent(null);
+      setFileLoading(false);
+      setFileError(null);
+      setFindingNavigationError(
+        finding.file
+          ? `Could not resolve "${finding.file}" to one unique file in this project's archive.`
+          : 'This finding does not include a source file path.',
+      );
+      return;
+    }
+
+    setFindingNavigationError(null);
+    setSelectedFile(matchedFile);
+    loadFileContent(matchedFile);
+  }, [visibleFiles, scanId, projectId, loadFileContent]);
+
+  const handleInlineFindingSelect = useCallback((finding) => {
     setSelectedFinding(finding);
     setShowFindingPanel(true);
-
-    if (!finding.file) return;
-
-    const matchedFile = files.find(
-      (f) => !f.isFolder && normalizePath(f.path) === normalizePath(finding.file),
-    );
-
-    if (matchedFile) {
-      setSelectedFile(matchedFile);
-      loadFileContent(matchedFile).then(() => {
-        // Scroll to line after content loads
-        if (finding.line) {
-          setTimeout(() => scrollToLine(finding.line), 150);
-        }
-      });
-    }
-  }, [files, loadFileContent, scrollToLine]);
+    setFindingNavigationError(null);
+  }, []);
 
   // ── Handle pending navigation from location state ────────────────────────────
   useEffect(() => {
     const pending = pendingNavigateRef.current;
-    if (!pending || files.length === 0) return;
+    if (!pending || filesLoading || !projectId || filesProjectId !== projectId) return;
     pendingNavigateRef.current = null;
     handleFindingNavigate(pending);
-  }, [files, handleFindingNavigate]);
+  }, [visibleFiles, filesLoading, filesProjectId, projectId, handleFindingNavigate]);
 
-  // ── Handle jump to line after file loads ────────────────────────────────────
+  // Pick a valid scanner-reported line only after the selected file is loaded.
   useEffect(() => {
-    if (fileContent && selectedFinding?.line) {
-      const timer = setTimeout(() => scrollToLine(selectedFinding.line), 100);
-      return () => clearTimeout(timer);
-    }
-  }, [fileContent, selectedFinding, scrollToLine]);
+    const pending = pendingAutoSelectRef.current;
+    if (
+      !pending
+      || !visibleFileContent
+      || !visibleSelectedFile
+      || pending.scanId !== scanId
+      || (scanId && findingsScanId !== scanId)
+      || pending.filePath !== normalizePath(visibleSelectedFile.path)
+      || normalizePath(visibleFileContent.path) !== normalizePath(visibleSelectedFile.path)
+    ) return;
+
+    pendingAutoSelectRef.current = null;
+    const lineCount = String(visibleFileContent.content || '').split('\n').length;
+    const fileFindings = sortFindings(
+      visibleResolvedFindings.filter(
+        (finding) => finding.resolvedPath
+          && normalizePath(finding.resolvedPath) === normalizePath(visibleSelectedFile.path),
+      ),
+    );
+    const firstValid = fileFindings.find((finding) => {
+      const line = Number(finding.line);
+      return Number.isInteger(line) && line > 0 && line <= lineCount;
+    });
+    setSelectedFinding(firstValid || fileFindings[0] || null);
+    setShowFindingPanel(false);
+  }, [visibleFileContent, visibleSelectedFile, visibleResolvedFindings, findingsScanId, scanId]);
 
   // ── Project picker handler ───────────────────────────────────────────────────
   const handleProjectSelect = (pid) => {
-    setScanId(null);
     setFindings([]);
     setSelectedFinding(null);
     setShowFindingPanel(false);
@@ -330,7 +523,7 @@ const FileTreeExplorer = () => {
           icon: 'Archive',
           onSelect: () => handleProjectSelect(p.id),
         }))
-      : [{ type: 'label', label: 'No projects uploaded yet' }]),
+      : [{ type: 'label', label: projectsError || 'No projects uploaded yet' }]),
     { type: 'separator' },
     {
       key: 'upload',
@@ -351,8 +544,8 @@ const FileTreeExplorer = () => {
         <PageHeader
           title="Code explorer"
           description={
-            projectName
-              ? `${projectName}${scanId ? ' · findings are linked to the selected scan' : ''}`
+            visibleProjectName
+              ? `${visibleProjectName}${scanId ? ' · findings are linked to the selected scan' : ''}`
               : 'Browse the files of an uploaded project and inspect the findings attached to them.'
           }
           actions={
@@ -398,7 +591,7 @@ const FileTreeExplorer = () => {
                 })}
               </div>
 
-              {findings.length > 0 ? (
+              {visibleFindings.length > 0 ? (
                 <Button
                   variant={showFindingPanel ? 'default' : 'outline'}
                   iconName="ShieldAlert"
@@ -406,7 +599,7 @@ const FileTreeExplorer = () => {
                   onClick={() => setShowFindingPanel((open) => !open)}
                   aria-expanded={showFindingPanel}
                 >
-                  {findings.length} {findings.length === 1 ? 'finding' : 'findings'}
+                  {visibleFindings.length} {visibleFindings.length === 1 ? 'finding' : 'findings'}
                 </Button>
               ) : null}
 
@@ -423,6 +616,17 @@ const FileTreeExplorer = () => {
             </>
           }
         />
+
+        {findingsError ? (
+          <p role="alert" className="rounded-lg border border-warning/30 bg-warning/10 px-4 py-2 text-sm text-warning">
+            {findingsError}
+          </p>
+        ) : null}
+        {findingNavigationError ? (
+          <p role="alert" className="rounded-lg border border-warning/30 bg-warning/10 px-4 py-2 text-sm text-warning">
+            {findingNavigationError}
+          </p>
+        ) : null}
 
         {/* No project selected */}
         {!projectId && !filesLoading ? (
@@ -449,12 +653,13 @@ const FileTreeExplorer = () => {
             {/* File tree panel */}
             <div className={cn('min-w-0', viewMode === 'full' && 'hidden')}>
               <FileTreePanel
-                files={files}
+                files={visibleFiles}
                 loading={filesLoading}
                 error={filesError}
-                selectedFile={selectedFile}
+                selectedFile={visibleSelectedFile}
                 onFileSelect={handleFileSelect}
-                findings={findings}
+                findings={orderedResolvedFindings}
+                revealFilePath={visibleSelectedFile?.path}
                 className={paneHeight}
               />
             </div>
@@ -462,22 +667,19 @@ const FileTreeExplorer = () => {
             {/* Code viewer panel */}
             <div className={cn('min-w-0', viewMode !== 'full' && 'hidden lg:block')}>
               <CodePreviewPanel
-                file={selectedFile}
-                fileContent={fileContent}
+                file={visibleSelectedFile}
+                fileContent={visibleFileContent}
                 loading={fileLoading}
                 error={fileError}
-                findings={findings}
+                findings={orderedResolvedFindings}
                 selectedFinding={selectedFinding}
-                onFindingClick={(finding) => {
-                  setSelectedFinding(finding);
-                  setShowFindingPanel(true);
-                }}
+                onFindingClick={handleInlineFindingSelect}
                 className={paneHeight}
               />
             </div>
 
             {/* Finding details panel — a drawer below 2xl, a column above */}
-            {showFindingPanel && findings.length > 0 ? (
+            {showFindingPanel && (visibleFindings.length > 0 || selectedFinding) ? (
               <>
                 <div
                   className="fixed inset-0 z-[900] bg-slate-950/50 backdrop-blur-sm 2xl:hidden"
@@ -493,7 +695,11 @@ const FileTreeExplorer = () => {
                 >
                   <FindingDetailsPanel
                     finding={selectedFinding}
-                    findings={findings}
+                    findings={
+                      visibleFindings.some((finding) => finding.id === selectedFinding?.id)
+                        ? visibleFindings
+                        : [...visibleFindings, selectedFinding].filter(Boolean)
+                    }
                     onSelectFinding={handleFindingNavigate}
                     onClose={() => setShowFindingPanel(false)}
                     onViewAI={() => setShowAIExplanation(true)}

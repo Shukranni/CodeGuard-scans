@@ -88,7 +88,7 @@ GITLEAKS_RAW = {
     'RuleID': 'generic-api-key',
     'Description': 'Generic API Key',
     'StartLine': 4,
-    'EndLine': 4,
+    'EndLine': 5,
     'Match': 'api_key = "sk-live-SUPERSECRET123"',
     'Secret': 'sk-live-SUPERSECRET123',
     'File': 'config/settings.py',
@@ -287,6 +287,8 @@ class FindingDetailEndpointTests(ExplanationTestBase):
         finding = res.data['finding']
         self.assertIn('[REDACTED]', finding['code_snippet'])
         self.assertTrue(finding['secret_detected'])
+        self.assertEqual(finding['line'], GITLEAKS_RAW['StartLine'])
+        self.assertEqual(finding['end_line'], GITLEAKS_RAW['EndLine'])
 
     def test_semgrep_placeholder_is_not_shown_as_code(self):
         res = self.client.get(self.detail_url('semgrep_1'))

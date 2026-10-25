@@ -7,7 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from .models import Project
 from .serializers import ZipUploadSerializer, ProjectListSerializer, GitHubRepositorySerializer
-from .utils.zip_validator import validate_zip
+from .utils.zip_validator import InvalidZipArchive, validate_zip
 from .utils.archive import local_archive_path
 from .utils.github import (
     GitHubRepositoryError,
@@ -19,6 +19,7 @@ import zipfile
 import logging
 import os
 import posixpath
+import re
 import shutil
 import tempfile
 from django.conf import settings
@@ -77,6 +78,18 @@ BINARY_EXTENSIONS = {
     ".pyc", ".pyo", ".class",
     ".lock",
 }
+
+
+def _looks_binary(content):
+    if b'\x00' in content:
+        return True
+    if not content:
+        return False
+    control_bytes = sum(
+        byte < 32 and byte not in (9, 10, 12, 13)
+        for byte in content
+    )
+    return control_bytes / len(content) > 0.3
 
 
 # Create your views here.
@@ -254,6 +267,12 @@ class ValidateProjectView(APIView):
                             if ext in LANGUAGE_EXTENSIONS:
                                 languages.add(LANGUAGE_EXTENSIONS[ext])
 
+        except InvalidZipArchive:
+            logger.warning('Project archive is missing for project %s', project.pk)
+            return Response(
+                {"error": "The project archive could not be found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
         except zipfile.BadZipFile:
             return Response(
                 {
@@ -290,6 +309,26 @@ def _normalize_path(raw):
     return p
 
 
+def _requested_file_path(raw):
+    """Validate a client path before normalising it for ZIP member lookup."""
+    value = raw.replace('\\', '/')
+    if (
+        '\x00' in value
+        or value.startswith('/')
+        or re.match(r'^[A-Za-z]:', value)
+    ):
+        return None, status.HTTP_400_BAD_REQUEST
+
+    if '..' in value.split('/'):
+        return None, status.HTTP_403_FORBIDDEN
+
+    normalized = posixpath.normpath(value)
+    if normalized in ('', '.', '..') or normalized.startswith('../'):
+        return None, status.HTTP_400_BAD_REQUEST
+
+    return normalized, None
+
+
 class FileTreeView(APIView):
     """
     GET /api/projects/<project_id>/filetree/
@@ -319,11 +358,13 @@ class FileTreeView(APIView):
         project = get_object_or_404(Project, id=project_id, owner=request.user)
 
         try:
-            entries = []
+            entries_by_path = {}
             with local_archive_path(project) as zip_path:
                 with zipfile.ZipFile(zip_path, 'r') as zf:
                     for info in zf.infolist():
-                        norm = _normalize_path(info.filename)
+                        norm, path_error_status = _requested_file_path(info.filename)
+                        if path_error_status:
+                            continue
                         if not norm or norm == '.':
                             continue
 
@@ -331,16 +372,17 @@ class FileTreeView(APIView):
                         _, ext = os.path.splitext(norm)
                         ext = ext.lower()
 
-                        entries.append({
+                        entries_by_path[norm] = {
                             "path": norm,
                             "name": posixpath.basename(norm),
                             "isFolder": is_dir,
                             "language": LANGUAGE_EXTENSIONS.get(ext, "Unknown") if not is_dir else None,
                             "size": info.file_size if not is_dir else None,
                             "isBinary": ext in BINARY_EXTENSIONS if not is_dir else False,
-                        })
+                        }
 
             # Sort: folders first, then alphabetically by path
+            entries = list(entries_by_path.values())
             entries.sort(key=lambda e: (not e["isFolder"], e["path"].lower()))
 
             return Response({
@@ -349,12 +391,19 @@ class FileTreeView(APIView):
                 "files": entries,
             })
 
+        except InvalidZipArchive:
+            logger.warning('Project archive is missing for project %s', project.pk)
+            return Response(
+                {"error": "The project archive could not be found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
         except zipfile.BadZipFile:
             return Response(
                 {"error": "The uploaded file is not a valid ZIP archive."},
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY
             )
-        except Exception as e:
+        except Exception:
+            logger.exception('Could not read file tree for project %s', project.pk)
             return Response(
                 {"error": "Could not read the project archive."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -393,27 +442,17 @@ class FileContentView(APIView):
     def get(self, request, project_id):
         project = get_object_or_404(Project, id=project_id, owner=request.user)
 
-        raw_path = request.query_params.get('path', '').strip()
+        raw_path = request.query_params.get('path', '')
         if not raw_path:
             return Response(
                 {"error": "The 'path' query parameter is required."},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Normalise and validate — reject traversal attempts
-        norm = _normalize_path(raw_path)
-        if not norm or norm.startswith('..') or '//' in norm:
-            return Response(
-                {"error": "Invalid file path."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Double-check after posixpath.normpath that we never escape root
-        if '..' in norm.split('/'):
-            return Response(
-                {"error": "Path traversal detected."},
-                status=status.HTTP_403_FORBIDDEN
-            )
+        norm, path_error_status = _requested_file_path(raw_path)
+        if path_error_status:
+            message = 'Path traversal detected.' if path_error_status == status.HTTP_403_FORBIDDEN else 'Invalid file path.'
+            return Response({"error": message}, status=path_error_status)
 
         # Check extension
         _, ext = os.path.splitext(norm)
@@ -442,6 +481,11 @@ class FileContentView(APIView):
                         )
 
                     info = name_map[norm]
+                    if info.is_dir():
+                        return Response(
+                            {"error": f"File '{norm}' not found in the project."},
+                            status=status.HTTP_404_NOT_FOUND
+                        )
 
                     if info.file_size > MAX_PREVIEW_BYTES:
                         # Read only the first MAX_PREVIEW_BYTES
@@ -452,6 +496,17 @@ class FileContentView(APIView):
                         with zf.open(info) as f:
                             raw_bytes = f.read()
                         truncated = False
+
+                    if _looks_binary(raw_bytes):
+                        return Response(
+                            {
+                                "path": norm,
+                                "name": posixpath.basename(norm),
+                                "isBinary": True,
+                                "error": "Binary files cannot be previewed.",
+                            },
+                            status=status.HTTP_422_UNPROCESSABLE_ENTITY
+                        )
 
                     # Decode — try UTF-8 first, fall back to latin-1
                     try:
@@ -481,12 +536,19 @@ class FileContentView(APIView):
                         "isBinary": False,
                     })
 
+        except InvalidZipArchive:
+            logger.warning('Project archive is missing for project %s', project.pk)
+            return Response(
+                {"error": "The project archive could not be found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
         except zipfile.BadZipFile:
             return Response(
                 {"error": "The uploaded file is not a valid ZIP archive."},
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY
             )
-        except Exception as e:
+        except Exception:
+            logger.exception('Could not read file %s from project %s', norm, project.pk)
             return Response(
                 {"error": "Could not read the file from the project archive."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
