@@ -6,6 +6,7 @@ import Icon from '../../../components/AppIcon';
 import Input from '../../../components/ui/Input';
 import { SeverityDot } from '../../../components/ui/SeverityBadge';
 import { Skeleton } from '../../../components/ui/Skeleton';
+import Button from '../../../components/ui/Button';
 import { cn } from '../../../utils/cn';
 
 // Normalise paths consistently (same logic as backend)
@@ -24,6 +25,7 @@ const FileTreePanel = ({
   files = [],
   loading,
   error,
+  onUploadProject,
   selectedFile,
   onFileSelect,
   findings = [],
@@ -357,6 +359,17 @@ const FileTreePanel = ({
         </span>
         <p className="mt-3 text-sm font-medium text-foreground">Failed to load files</p>
         <p className="mt-1 max-w-xs text-xs text-muted-foreground">{error}</p>
+        {onUploadProject ? (
+          <Button
+            variant="outline"
+            size="sm"
+            iconName="Upload"
+            className="mt-4"
+            onClick={onUploadProject}
+          >
+            Upload project
+          </Button>
+        ) : null}
       </div>
     );
   }

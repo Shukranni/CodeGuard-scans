@@ -15,6 +15,7 @@ import os
 import sys
 from datetime import timedelta
 from corsheaders.defaults import default_headers
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -244,6 +245,23 @@ STORAGES = {
 if os.environ.get('AWS_STORAGE_BUCKET_NAME', '').strip():
     STORAGES['default'] = {'BACKEND': 'storages.backends.s3.S3Storage'}
 
+if _env_bool('CODEGUARD_REQUIRE_OBJECT_STORAGE'):
+    required_storage_settings = (
+        'AWS_STORAGE_BUCKET_NAME',
+        'AWS_ACCESS_KEY_ID',
+        'AWS_SECRET_ACCESS_KEY',
+        'AWS_S3_ENDPOINT_URL',
+    )
+    missing_storage_settings = [
+        name for name in required_storage_settings
+        if not os.environ.get(name, '').strip()
+    ]
+    if missing_storage_settings:
+        raise ImproperlyConfigured(
+            'Persistent project archive storage is required. Configure '
+            f'{", ".join(missing_storage_settings)} before starting CodeGuard.'
+        )
+
 # ── CORS ─────────────────────────────────────────────────────────────────────
 # The React app is served from a different origin than the API (Vercel,
 # Netlify, Cloudflare Pages, Render Static).  Set
@@ -353,4 +371,3 @@ try:
     AI_TIMEOUT_SECONDS = max(5, int(os.environ.get('CODEGUARD_AI_TIMEOUT', '120')))
 except (TypeError, ValueError):
     AI_TIMEOUT_SECONDS = 120
-

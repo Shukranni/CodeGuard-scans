@@ -95,7 +95,7 @@ blueprint means “prompt me in the dashboard”):
 | `DJANGO_ALLOWED_HOSTS` | set | `*` to start; ideally `codeguard-api-xxxx.onrender.com` |
 | `DJANGO_CORS_ALLOWED_ORIGINS` | **yes** | `https://codeguard-web-xxxx.onrender.com` |
 | `OPENROUTER_API_KEY` | optional | for the AI explanations (server-side only) |
-| `AWS_STORAGE_BUCKET_NAME`<br>`AWS_ACCESS_KEY_ID`<br>`AWS_SECRET_ACCESS_KEY`<br>`AWS_S3_ENDPOINT_URL` | recommended | S3-compatible bucket for uploaded archives (see §4) |
+| `AWS_STORAGE_BUCKET_NAME`<br>`AWS_ACCESS_KEY_ID`<br>`AWS_SECRET_ACCESS_KEY`<br>`AWS_S3_ENDPOINT_URL` | **yes** | S3-compatible bucket for uploaded archives (see §4); required because Render's local filesystem is ephemeral |
 
 Then open **codeguard-web → Environment** and set:
 
@@ -169,9 +169,11 @@ Free buckets:
 | [Cloudflare R2](https://developers.cloudflare.com/r2/) | 10 GB, no egress fees | `https://<account_id>.r2.cloudflarestorage.com` |
 | [Backblaze B2](https://www.backblaze.com/cloud-storage) | 10 GB | `https://s3.<region>.backblazeb2.com` |
 
-Set the four `AWS_*` variables on `codeguard-api` and redeploy. If you skip
-this step the app still works until the API instance is restarted — at that
-point previously uploaded archives are gone (new uploads keep working).
+Set the four `AWS_*` variables on `codeguard-api` and redeploy. The Render
+blueprint now refuses to start without these settings rather than silently
+storing archives on ephemeral disk. Archives lost by an earlier restart cannot
+be recovered from the project record; upload those projects again after
+object storage is configured.
 
 ---
 

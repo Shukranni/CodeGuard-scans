@@ -305,7 +305,12 @@ const FileTreeExplorer = () => {
         if (!active) return;
         const st = err.response?.status;
         if (st === 404) {
-          setFilesError(err.response.data?.error || 'Project not found. It may have been deleted.');
+          const message = err.response.data?.error;
+          setFilesError(
+            message === 'The project archive could not be found.'
+              ? 'This project’s archive is unavailable. Upload the project again to browse its files. Configure persistent object storage to keep archives available after restarts.'
+              : message || 'Project not found. It may have been deleted.',
+          );
         }
         else if (st === 403 || st === 401) setFilesError('You do not have access to this project.');
         else setFilesError('Could not load the file tree. Please try again.');
@@ -656,6 +661,11 @@ const FileTreeExplorer = () => {
                 files={visibleFiles}
                 loading={filesLoading}
                 error={filesError}
+                onUploadProject={
+                  filesError?.startsWith('This project’s archive is unavailable.')
+                    ? () => navigate('/new-scan-setup')
+                    : undefined
+                }
                 selectedFile={visibleSelectedFile}
                 onFileSelect={handleFileSelect}
                 findings={orderedResolvedFindings}

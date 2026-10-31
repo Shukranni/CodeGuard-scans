@@ -59,6 +59,10 @@ services:
         sync: false
       - key: AWS_S3_ENDPOINT_URL
         sync: false
+      # Project archives must use persistent object storage; Render's local
+      # filesystem is ephemeral and would make existing projects unreadable.
+      - key: CODEGUARD_REQUIRE_OBJECT_STORAGE
+        value: "true"
       # AI provider credentials (server-side only, never in the frontend).
       - key: CODEGUARD_AI_PROVIDER
         value: auto
