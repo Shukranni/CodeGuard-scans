@@ -108,13 +108,21 @@ class ZipUploadView(APIView):
 
         zip_file = serializer.validated_data['file']
 
-        # Assign the authenticated user as the owner — never trust a user-id
-        # supplied by the frontend.
-        project = Project.objects.create(
-            name=zip_file.name,
-            zip_file=zip_file,
-            owner=request.user,
-        )
+        try:
+            # Assign the authenticated user as the owner — never trust a user-id
+            # supplied by the frontend.
+            project = Project.objects.create(
+                name=zip_file.name,
+                zip_file=zip_file,
+                owner=request.user,
+            )
+        except Exception:
+            logger.exception('Failed to save uploaded project for user %s', request.user.pk)
+            return Response(
+                {'error': 'The file could not be saved. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         return Response(
             {
                 'id': project.id,

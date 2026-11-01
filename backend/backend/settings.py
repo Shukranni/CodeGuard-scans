@@ -293,6 +293,13 @@ CORS_ALLOW_HEADERS = list(default_headers) + [
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.environ.get('MEDIA_ROOT') or os.path.join(BASE_DIR, 'media')
 
+# ── Upload size limits ────────────────────────────────────────────────────────
+# Django defaults DATA_UPLOAD_MAX_MEMORY_SIZE to 2.5 MB which causes a 500 for
+# any project ZIP larger than that.  100 MB matches the serializer validation
+# limit and the UI hint shown to the user.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024   # 100 MB
+FILE_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024   # 100 MB (temp RAM buffer)
+
 # ────────────────────────────────────────────────────────────────────────────
 # Django REST Framework
 # ────────────────────────────────────────────────────────────────────────────

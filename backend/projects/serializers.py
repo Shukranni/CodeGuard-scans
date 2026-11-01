@@ -8,8 +8,8 @@ class ZipUploadSerializer(serializers.Serializer):
     """
     file = serializers.FileField()
 
-    def validate_zip_file(self, value):
-        if not value.name.endswith('.zip'):
+    def validate_file(self, value):
+        if not value.name.lower().endswith('.zip'):
             raise serializers.ValidationError('Only ZIP files are allowed.')
 
         if value.size > 100 * 1024 * 1024:  # Limit file size to 100MB
