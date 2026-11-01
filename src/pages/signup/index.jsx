@@ -146,7 +146,7 @@ const SignUp = () => {
               <Icon name="Shield" size={24} />
             </div>
             <span className="text-foreground dark:text-white text-xl font-heading font-semibold">
-              SecureCodeAnalyzer
+              CodeGuard
             </span>
           </div>
         </div>
@@ -177,7 +177,7 @@ const SignUp = () => {
         </div>
 
         <div className="relative z-10 text-muted-foreground dark:text-white/40 text-xs">
-          © {new Date().getFullYear()} SecureCodeAnalyzer
+          © {new Date().getFullYear()} CodeGuard. All rights reserved.
         </div>
       </div>
 
@@ -190,7 +190,7 @@ const SignUp = () => {
               <Icon name="Shield" size={24} color="var(--color-primary)" />
             </div>
             <span className="text-xl font-heading font-semibold text-foreground">
-              SecureCodeAnalyzer
+              CodeGuard
             </span>
           </div>
 

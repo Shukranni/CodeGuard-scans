@@ -150,9 +150,9 @@ const Sidebar = ({ isOpen = false, onClose }) => {
               <span className="truncate">Sign out</span>
             </button>
           ) : null}
-          <p className="mt-2 px-3 text-[11px] leading-relaxed text-muted-foreground">
-            Static analysis with Semgrep, Gitleaks and dependency auditing.
-          </p>
+          <div className="relative z-10 text-muted-foreground dark:text-white/40 text-xs">
+          © {new Date().getFullYear()} CodeGuard. All rights reserved.
+          </div>
         </div>
       </aside>
 
