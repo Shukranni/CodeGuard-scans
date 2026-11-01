@@ -232,6 +232,7 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 #   AWS_ACCESS_KEY_ID=...
 #   AWS_SECRET_ACCESS_KEY=...
 #   AWS_S3_ENDPOINT_URL=https://<account>.r2.cloudflarestorage.com
+#   AWS_S3_REGION_NAME=auto            # use "auto" for Cloudflare R2
 
 STORAGES = {
     'default': {
@@ -242,8 +243,24 @@ STORAGES = {
     },
 }
 
-if os.environ.get('AWS_STORAGE_BUCKET_NAME', '').strip():
-    STORAGES['default'] = {'BACKEND': 'storages.backends.s3.S3Storage'}
+_s3_bucket = os.environ.get('AWS_STORAGE_BUCKET_NAME', '').strip()
+if _s3_bucket:
+    # django-storages reads most AWS_* vars automatically, but the endpoint
+    # URL and region must be passed explicitly in OPTIONS so that Cloudflare
+    # R2 (and other S3-compatible services) work without extra monkey-patching.
+    _s3_endpoint = os.environ.get('AWS_S3_ENDPOINT_URL', '').strip()
+    _s3_region = os.environ.get('AWS_S3_REGION_NAME', 'auto').strip()
+    STORAGES['default'] = {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+        'OPTIONS': {
+            'bucket_name': _s3_bucket,
+            'endpoint_url': _s3_endpoint or None,
+            'region_name': _s3_region,
+            'default_acl': None,          # R2 doesn't support ACLs
+            'querystring_auth': False,     # serve public URLs without signatures
+            'file_overwrite': False,       # keep unique filenames on collision
+        },
+    }
 
 if _env_bool('CODEGUARD_REQUIRE_OBJECT_STORAGE'):
     required_storage_settings = (
